@@ -1,4 +1,29 @@
 <div class="space-y-6">
+    <!-- Header / Filter -->
+    <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
+        <div>
+            <h3 class="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Cakupan Analisis</h3>
+            <div class="mt-1.5 relative min-w-[240px]">
+                <select wire:model.live="batchId" class="appearance-none w-full bg-white dark:bg-[#1C212E] border border-slate-200 dark:border-[#2A303F] text-slate-900 dark:text-white text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block p-2.5 pr-10 outline-none transition-all cursor-pointer shadow-sm">
+                    <option value="">Semua Batch Impor</option>
+                    @foreach($batches as $batch)
+                        <option value="{{ $batch->id }}">
+                            Batch #{{ $batch->id }} ({{ $batch->created_at->format('d M H:i') }}) — {{ $batch->sourceConnection->name }}
+                        </option>
+                    @endforeach
+                </select>
+                <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-400">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                </div>
+            </div>
+        </div>
+        
+        <div class="flex items-center gap-2">
+            <span class="flex h-2 w-2 rounded-full bg-emerald-500"></span>
+            <span class="text-xs font-medium text-slate-500 dark:text-slate-400">Data Real-time</span>
+        </div>
+    </div>
+
     <!-- KPI Cards -->
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
         
@@ -126,19 +151,28 @@
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
-        document.addEventListener('livewire:initialized', () => {
-            const ctx = document.getElementById('similarityChart').getContext('2d');
-            
+        let similarityChartInstance = null;
+
+        function renderSimilarityChart() {
+            const canvas = document.getElementById('similarityChart');
+            if (!canvas) return;
+
             const isDarkMode = document.documentElement.classList.contains('dark');
-            const textColor = isDarkMode ? '#94a3b8' : '#64748b'; // slate-400 : slate-500
-            const gridColor = isDarkMode ? '#1e293b' : '#f1f5f9'; // slate-800 : slate-100
+            const textColor = isDarkMode ? '#94a3b8' : '#64748b';
+            const gridColor = isDarkMode ? '#1e293b' : '#f1f5f9';
+            const ctx = canvas.getContext('2d');
 
-            // Gradient for bars
+            // Destroy previous chart instance to avoid "Canvas already in use" error
+            if (similarityChartInstance) {
+                similarityChartInstance.destroy();
+                similarityChartInstance = null;
+            }
+
             const gradient = ctx.createLinearGradient(0, 0, 0, 300);
-            gradient.addColorStop(0, '#6366f1'); // indigo-500
-            gradient.addColorStop(1, '#818cf8'); // indigo-400
+            gradient.addColorStop(0, '#6366f1');
+            gradient.addColorStop(1, '#818cf8');
 
-            new Chart(ctx, {
+            similarityChartInstance = new Chart(ctx, {
                 type: 'bar',
                 data: {
                     labels: {!! $distributionLabels !!},
@@ -148,7 +182,6 @@
                         backgroundColor: gradient,
                         borderRadius: 6,
                         borderSkipped: false,
-                        barThickness: 'flex',
                         maxBarThickness: 40
                     }]
                 },
@@ -164,8 +197,6 @@
                             borderColor: isDarkMode ? '#334155' : '#e2e8f0',
                             borderWidth: 1,
                             padding: 12,
-                            boxPadding: 4,
-                            usePointStyle: true
                         }
                     },
                     scales: {
@@ -173,7 +204,7 @@
                             beginAtZero: true,
                             grid: { color: gridColor, drawBorder: false },
                             border: { display: false },
-                            ticks: { color: textColor, padding: 10, font: { family: 'Inter', size: 12 } }
+                            ticks: { color: textColor, padding: 10, font: { family: 'Inter', size: 12 }, precision: 0 }
                         },
                         x: {
                             grid: { display: false, drawBorder: false },
@@ -181,12 +212,18 @@
                             ticks: { color: textColor, padding: 10, font: { family: 'Inter', size: 12 } }
                         }
                     },
-                    interaction: {
-                        intersect: false,
-                        mode: 'index',
-                    },
+                    interaction: { intersect: false, mode: 'index' },
                 }
             });
-        });
+        }
+
+        // Initial render
+        document.addEventListener('livewire:initialized', renderSimilarityChart);
+
+        // Re-render after every Livewire update (catches import-completed refresh)
+        document.addEventListener('livewire:update', renderSimilarityChart);
+
+        // Re-render when theme is toggled manually
+        window.addEventListener('theme-changed', renderSimilarityChart);
     </script>
 </div>

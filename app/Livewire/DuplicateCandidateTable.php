@@ -4,7 +4,9 @@ namespace App\Livewire;
 
 use Livewire\Component;
 use Livewire\WithPagination;
+use Livewire\Attributes\On;
 use App\Models\DuplicateCandidate;
+use App\Models\ImportLog;
 use App\Services\GeminiService;
 
 class DuplicateCandidateTable extends Component
@@ -13,6 +15,26 @@ class DuplicateCandidateTable extends Component
 
     public $search = '';
     public $statusFilter = '';
+    public $batchId = '';
+
+    /**
+     * Auto-refresh table when a new import completes.
+     */
+    #[On('import-completed')]
+    public function refresh(): void
+    {
+        $this->resetPage();
+    }
+
+    /**
+     * Listen for filter updates from the dashboard
+     */
+    #[On('batch-filter-updated')]
+    public function updateBatchFilter($batchId): void
+    {
+        $this->batchId = $batchId;
+        $this->resetPage();
+    }
 
     public function validateWithAi($candidateId)
     {
@@ -36,24 +58,32 @@ class DuplicateCandidateTable extends Component
 
     public function render()
     {
-        $query = DuplicateCandidate::with(['projectA.sourceConnection', 'projectB.sourceConnection', 'aiValidationLog']);
+        $query = DuplicateCandidate::with(['projectA.sourceConnection', 'projectB.sourceConnection', 'aiValidationLog', 'batch']);
         
+        if ($this->batchId) {
+            $query->where('import_log_id', $this->batchId);
+        }
+
         if ($this->statusFilter) {
             $query->where('status', $this->statusFilter);
         }
 
         if ($this->search) {
-            $query->whereHas('projectA', function($q) {
-                $q->where('original_name', 'ilike', '%' . $this->search . '%');
-            })->orWhereHas('projectB', function($q) {
-                $q->where('original_name', 'ilike', '%' . $this->search . '%');
+            $query->where(function($q) {
+                $q->whereHas('projectA', function($q) {
+                    $q->where('original_name', 'ilike', '%' . $this->search . '%');
+                })->orWhereHas('projectB', function($q) {
+                    $q->where('original_name', 'ilike', '%' . $this->search . '%');
+                });
             });
         }
 
         $candidates = $query->orderBy('similarity_score', 'desc')->paginate(10);
+        $batches = ImportLog::with('sourceConnection')->orderBy('created_at', 'desc')->get();
 
         return view('livewire.duplicate-candidate-table', [
             'candidates' => $candidates,
+            'batches' => $batches,
         ]);
     }
 }

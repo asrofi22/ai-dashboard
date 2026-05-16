@@ -12,6 +12,13 @@
                 </div>
                 <input type="text" wire:model.live.debounce.300ms="search" placeholder="Cari nama proyek..." class="pl-9 pr-4 py-2 w-full sm:w-64 bg-slate-50 dark:bg-[#1C212E] border border-slate-200 dark:border-[#2A303F] text-sm rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 dark:text-white dark:placeholder-slate-500 transition-shadow outline-none">
             </div>
+
+            <select wire:model.live="batchId" class="py-2 pl-3 pr-8 bg-slate-50 dark:bg-[#1C212E] border border-slate-200 dark:border-[#2A303F] text-sm rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 dark:text-white outline-none appearance-none font-medium text-slate-700 dark:text-slate-300">
+                <option value="">Batch: Semua</option>
+                @foreach($batches as $batch)
+                    <option value="{{ $batch->id }}">Batch #{{ $batch->id }} ({{ $batch->sourceConnection->name }})</option>
+                @endforeach
+            </select>
             
             <select wire:model.live="statusFilter" class="py-2 pl-3 pr-8 bg-slate-50 dark:bg-[#1C212E] border border-slate-200 dark:border-[#2A303F] text-sm rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 dark:text-white outline-none appearance-none font-medium text-slate-700 dark:text-slate-300">
                 <option value="">Status: Semua</option>
@@ -71,6 +78,7 @@
                             <div class="flex flex-col gap-1.5">
                                 <div class="flex items-center justify-between">
                                     <span class="text-sm font-bold text-slate-900 dark:text-white">{{ number_format($candidate->similarity_score * 100, 1) }}%</span>
+                                    <span class="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-tighter bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700">Batch #{{ $candidate->import_log_id }}</span>
                                 </div>
                                 <div class="w-full bg-slate-100 dark:bg-slate-800 rounded-full h-1.5">
                                     @php $scorePct = min($candidate->similarity_score * 100, 100); @endphp
