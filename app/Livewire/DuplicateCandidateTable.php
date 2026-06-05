@@ -17,6 +17,10 @@ class DuplicateCandidateTable extends Component
     public $statusFilter = '';
     public $batchId = '';
 
+    // Modal state - Store only ID to prevent serialization issues
+    public $showModal = false;
+    public $selectedCandidateId = null;
+
     /**
      * Auto-refresh table when a new import completes.
      */
@@ -36,6 +40,52 @@ class DuplicateCandidateTable extends Component
         $this->resetPage();
     }
 
+    public function openDetail($candidateId): void
+    {
+        $this->selectedCandidateId = $candidateId;
+        $this->showModal = true;
+    }
+
+    public function closeModal(): void
+    {
+        $this->showModal = false;
+        $this->selectedCandidateId = null;
+    }
+
+    /**
+     * Computed-like helper to get the candidate with all relationships
+     */
+    public function getSelectedCandidateProperty()
+    {
+        if (!$this->selectedCandidateId) return null;
+
+        return DuplicateCandidate::with([
+            'projectA.sourceConnection', 
+            'projectB.sourceConnection', 
+            'aiValidationLog'
+        ])->find($this->selectedCandidateId);
+    }
+
+    public function resolveAsDuplicate(): void
+    {
+        $candidate = $this->getSelectedCandidateProperty();
+        if ($candidate) {
+            $candidate->update(['status' => 'confirmed']);
+            $this->closeModal();
+            $this->dispatch('import-completed'); 
+        }
+    }
+
+    public function resolveAsNotDuplicate(): void
+    {
+        $candidate = $this->getSelectedCandidateProperty();
+        if ($candidate) {
+            $candidate->update(['status' => 'rejected']);
+            $this->closeModal();
+            $this->dispatch('import-completed');
+        }
+    }
+
     public function validateWithAi($candidateId)
     {
         $candidate = DuplicateCandidate::with(['projectA', 'projectB'])->findOrFail($candidateId);
@@ -44,13 +94,16 @@ class DuplicateCandidateTable extends Component
         $result = $gemini->validateDuplicate($candidate->projectA->original_name, $candidate->projectB->original_name);
         
         if ($result) {
-            $candidate->aiValidationLog()->create([
-                'prompt' => $result['prompt'],
-                'response' => $result['response'],
-                'result' => $result['result'],
-                'reasoning' => $result['reasoning'],
-                'confidence_score' => $result['confidence_score'],
-            ]);
+            $candidate->aiValidationLog()->updateOrCreate(
+                ['duplicate_candidate_id' => $candidate->id],
+                [
+                    'prompt' => $result['prompt'],
+                    'response' => $result['response'],
+                    'result' => $result['result'],
+                    'reasoning' => $result['reasoning'],
+                    'confidence_score' => $result['confidence_score'],
+                ]
+            );
             
             $candidate->update(['ai_validation_status' => 'validated']);
         }
@@ -69,11 +122,12 @@ class DuplicateCandidateTable extends Component
         }
 
         if ($this->search) {
-            $query->where(function($q) {
-                $q->whereHas('projectA', function($q) {
-                    $q->where('original_name', 'ilike', '%' . $this->search . '%');
-                })->orWhereHas('projectB', function($q) {
-                    $q->where('original_name', 'ilike', '%' . $this->search . '%');
+            $likeOperator = \Illuminate\Support\Facades\DB::getDriverName() === 'pgsql' ? 'ilike' : 'like';
+            $query->where(function($q) use ($likeOperator) {
+                $q->whereHas('projectA', function($q) use ($likeOperator) {
+                    $q->where('original_name', $likeOperator, '%' . $this->search . '%');
+                })->orWhereHas('projectB', function($q) use ($likeOperator) {
+                    $q->where('original_name', $likeOperator, '%' . $this->search . '%');
                 });
             });
         }
@@ -84,6 +138,7 @@ class DuplicateCandidateTable extends Component
         return view('livewire.duplicate-candidate-table', [
             'candidates' => $candidates,
             'batches' => $batches,
+            'selectedCandidate' => $this->getSelectedCandidateProperty()
         ]);
     }
 }

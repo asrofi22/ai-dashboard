@@ -43,8 +43,12 @@ return new class extends Migration
             $table->json('metadata')->nullable();
             $table->timestamps();
 
-            // Index for pg_trgm similarity search
-            $table->index([DB::raw('normalized_name gin_trgm_ops')], 'idx_projects_normalized_name_trgm', 'gin');
+            // Index for pg_trgm similarity search (only on PostgreSQL)
+            if (DB::getDriverName() === 'pgsql') {
+                $table->index([DB::raw('normalized_name gin_trgm_ops')], 'idx_projects_normalized_name_trgm', 'gin');
+            } else {
+                $table->index('normalized_name', 'idx_projects_normalized_name_trgm');
+            }
         });
 
         Schema::create('duplicate_candidates', function (Blueprint $table) {
