@@ -86,17 +86,22 @@ class WarehouseExplorer extends Component
             // 2. Fetch Data Preview (read-only execution)
             if ($this->activeTab === 'preview') {
                 try {
-                    $allowedTables = ['fact_sales', 'fact_payment', 'dim_customer', 'dim_product'];
-                    if (in_array($this->activeTableName, $allowedTables)) {
-                        $rawResult = DB::select("SELECT * FROM {$this->activeTableName} LIMIT 15");
-                        if (!empty($rawResult)) {
-                            $columns = array_keys((array) $rawResult[0]);
-                            $rows = array_map(fn($r) => (array) $r, $rawResult);
-                            $previewData = [
-                                'columns' => $columns,
-                                'rows' => $rows
-                            ];
-                        }
+                    $tableName = $this->activeTableName;
+                    $conn = \App\Models\EtlConnection::where('status', 'active')->get()->first(function($c) use ($tableName) {
+                        $tables = array_column($c->metadata['tables'] ?? [], 'name');
+                        return in_array($tableName, $tables);
+                    });
+
+                    $db = $conn ? $conn->getDatabaseConnection() : DB::connection();
+                    $rawResult = $db->select("SELECT * FROM {$tableName} LIMIT 15");
+
+                    if (!empty($rawResult)) {
+                        $columns = array_keys((array) $rawResult[0]);
+                        $rows = array_map(fn($r) => (array) $r, $rawResult);
+                        $previewData = [
+                            'columns' => $columns,
+                            'rows' => $rows
+                        ];
                     }
                 } catch (\Exception $e) {
                     Log::error("WarehouseExplorer Preview Query error: " . $e->getMessage());

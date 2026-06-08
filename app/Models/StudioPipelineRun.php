@@ -20,13 +20,15 @@ class StudioPipelineRun extends Model
         'rows_rejected',
         'execution_logs',
         'error_log',
-        'ai_failure_analysis'
+        'ai_failure_analysis',
+        'step_metrics'
     ];
 
     protected $casts = [
         'start_time' => 'datetime',
         'end_time' => 'datetime',
-        'ai_failure_analysis' => 'array'
+        'ai_failure_analysis' => 'array',
+        'step_metrics' => 'array'
     ];
 
     public function pipeline(): BelongsTo

@@ -1,4 +1,4 @@
-<div class="space-y-6" x-data="{ 
+<div class="space-y-6" @if($this->hasRunningJobs()) wire:poll.2s="loadData" @else wire:poll.15s="loadData" @endif x-data="{ 
     isRunning: false, 
     progress: 0, 
     logs: '', 
@@ -21,10 +21,21 @@
             const willSucceed = data.willSucceed;
             const steps = [];
             
+            // stepMetricsList keeps track of metrics for each step to write to the DB
+            let stepMetricsList = [];
+            
             steps.push({
                 desc: 'INFO - [' + new Date().toLocaleTimeString() + '] Menghubungkan ke data source: ' + data.sourceDriver.toUpperCase() + '...',
                 delay: 600,
-                action: () => {}
+                action: () => {
+                    stepMetricsList.push({
+                        step: 'Table Input',
+                        read: 0,
+                        written: 0,
+                        rejected: 0,
+                        status: 'Running'
+                    });
+                }
             });
             
             steps.push({
@@ -32,22 +43,71 @@
                 delay: 700,
                 action: () => {
                     this.rowsRead = Math.floor(Math.random() * 2500) + 500;
+                    let idx = stepMetricsList.findIndex(sm => sm.step === 'Table Input');
+                    if (idx !== -1) {
+                        stepMetricsList[idx].read = this.rowsRead;
+                        stepMetricsList[idx].written = this.rowsRead;
+                        stepMetricsList[idx].status = 'Success';
+                    }
                 }
             });
 
             // Transformations
             if (data.transformations.length > 0) {
                 data.transformations.forEach(t => {
+                    let desc = 'INFO - [' + new Date().toLocaleTimeString() + '] Menerapkan transformasi: \'' + t + '\'...';
+                    
+                    if (t === 'Value Mapper') {
+                        desc = 'INFO - [' + new Date().toLocaleTimeString() + '] [Pentaho Value Mapper] Memetakan nilai diskrit kustom (contoh: M/F -> Male/Female)...';
+                    } else if (t === 'String Operations') {
+                        desc = 'INFO - [' + new Date().toLocaleTimeString() + '] [Pentaho String Operations] Membersihkan spasi penutup, substring, dan padding kolom...';
+                    } else if (t === 'Mathematical Calculator') {
+                        desc = 'INFO - [' + new Date().toLocaleTimeString() + '] [Pentaho Calculator] Membersihkan data dengan rumus matematika...';
+                    } else if (t === 'Sort Rows') {
+                        desc = 'INFO - [' + new Date().toLocaleTimeString() + '] [Pentaho Sort Rows] Mengurutkan data berdasarkan kunci index utama...';
+                    } else if (t === 'Group By') {
+                        desc = 'INFO - [' + new Date().toLocaleTimeString() + '] [Pentaho Group By] Melakukan agregasi data kelompok (mengurangi jumlah baris ditulis)...';
+                    } else if (t === 'Concat Fields') {
+                        desc = 'INFO - [' + new Date().toLocaleTimeString() + '] [Pentaho Concat Fields] Menggabungkan beberapa field menjadi satu kolom target...';
+                    } else if (t === 'Split Fields') {
+                        desc = 'INFO - [' + new Date().toLocaleTimeString() + '] [Pentaho Split Fields] Memecah nilai kolom terdelimitasi menjadi kolom terpisah...';
+                    } else if (t === 'Add Constants') {
+                        desc = 'INFO - [' + new Date().toLocaleTimeString() + '] [Pentaho Add Constants] Menyisipkan nilai konstanta statis ke kolom target...';
+                    } else if (t === 'Lookup') {
+                        desc = 'INFO - [' + new Date().toLocaleTimeString() + '] [Pentaho Database Lookup] Melakukan pencarian ending_balance periode sebelumnya sebagai beginning_balance...';
+                    } else if (t === 'Join') {
+                        desc = 'INFO - [' + new Date().toLocaleTimeString() + '] [Pentaho Merge Join] Menggabungkan data master transaksi dan profil customer...';
+                    } else if (t === 'Aggregation') {
+                        desc = 'INFO - [' + new Date().toLocaleTimeString() + '] [Pentaho Group By] Agregasi transaksi pembayaran (sum amount) per customer per bulan...';
+                    } else if (t === 'Calculator') {
+                        desc = 'INFO - [' + new Date().toLocaleTimeString() + '] [Pentaho Calculator] Menghitung formula: ending_balance = beginning_balance + payment_amount...';
+                    } else if (t === 'Data Validation') {
+                        desc = 'INFO - [' + new Date().toLocaleTimeString() + '] [Pentaho Data Validation] Memvalidasi keabsahan data saldo akhir (non-negatif)...';
+                    }
+
                     steps.push({
-                        desc: 'INFO - [' + new Date().toLocaleTimeString() + '] Menerapkan transformasi: \'' + t + '\'...',
+                        desc: desc,
                         delay: 600,
                         action: () => {
+                            let stepRejected = 0;
                             if (t === 'Remove Null') {
-                                this.rowsRejected += Math.floor(Math.random() * 10) + 1;
+                                stepRejected = Math.floor(Math.random() * 10) + 1;
                             }
                             if (t === 'Remove Duplicate') {
-                                this.rowsRejected += Math.floor(Math.random() * 8) + 1;
+                                stepRejected = Math.floor(Math.random() * 8) + 1;
                             }
+                            if (t === 'Group By') {
+                                stepRejected = Math.floor(this.rowsRead * 0.4);
+                            }
+                            this.rowsRejected += stepRejected;
+                            
+                            stepMetricsList.push({
+                                step: t,
+                                read: this.rowsRead,
+                                written: this.rowsRead - this.rowsRejected,
+                                rejected: stepRejected,
+                                status: 'Success'
+                            });
                         }
                     });
                 });
@@ -56,7 +116,15 @@
             steps.push({
                 desc: 'INFO - [' + new Date().toLocaleTimeString() + '] Menghubungkan ke target PostgreSQL Data Warehouse...',
                 delay: 650,
-                action: () => {}
+                action: () => {
+                    stepMetricsList.push({
+                        step: 'Table Output',
+                        read: this.rowsRead - this.rowsRejected,
+                        written: 0,
+                        rejected: 0,
+                        status: 'Running'
+                    });
+                }
             });
 
             if (willSucceed) {
@@ -65,6 +133,11 @@
                     delay: 800,
                     action: () => {
                         this.rowsWritten = this.rowsRead - this.rowsRejected;
+                        let idx = stepMetricsList.findIndex(sm => sm.step === 'Table Output');
+                        if (idx !== -1) {
+                            stepMetricsList[idx].written = this.rowsWritten;
+                            stepMetricsList[idx].status = 'Success';
+                        }
                     }
                 });
                 
@@ -91,6 +164,10 @@
                     delay: 900,
                     action: () => {
                         this.rowsRejected = this.rowsRead;
+                        let idx = stepMetricsList.findIndex(sm => sm.step === 'Table Output');
+                        if (idx !== -1) {
+                            stepMetricsList[idx].status = 'Failed';
+                        }
                     }
                 });
                 
@@ -111,6 +188,10 @@
                         current.action();
                         this.logs += current.desc + '\n';
                         this.progress = Math.min(100, Math.floor(((step + 1) / steps.length) * 100));
+                        
+                        // Update live progress to database
+                        $wire.updateRunProgress(data.runId, this.logs, this.rowsRead, this.rowsWritten, this.rowsRejected, stepMetricsList);
+                        
                         step++;
                         executeStep();
                     }, current.delay);
@@ -223,84 +304,220 @@
             <!-- AI Failure Analysis insights drawer (consistent with modern SaaS styling) -->
             @php
                 $selectedRun = $selectedRunId ? collect($runs)->firstWhere('id', $selectedRunId) : null;
-            @endphp
-
-            @if($selectedRun && $selectedRun['status'] === 'Failed')
-                <div class="bg-red-50/20 dark:bg-red-500/5 border border-red-200 dark:border-red-500/20 rounded-xl p-5 shadow-sm space-y-4 animate-in fade-in slide-in-from-top-4 duration-200 text-xs">
+            @endphp            @if($selectedRun)
+                @php
+                    $status = $selectedRun['status'];
+                    $panelBg = match($status) {
+                        'Success' => 'bg-emerald-50/20 dark:bg-emerald-500/5 border-emerald-200 dark:border-emerald-500/20',
+                        'Running' => 'bg-amber-50/20 dark:bg-amber-500/5 border-amber-200 dark:border-amber-500/20',
+                        default => 'bg-red-50/20 dark:bg-red-500/5 border-red-200 dark:border-red-500/20'
+                    };
+                    $badgeBg = match($status) {
+                        'Success' => 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400',
+                        'Running' => 'bg-amber-100 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400 animate-pulse',
+                        default => 'bg-red-100 text-red-700 dark:bg-red-500/10 dark:text-red-400'
+                    };
+                @endphp
+                
+                <div class="{{ $panelBg }} border rounded-xl p-5 shadow-sm space-y-4 animate-in fade-in slide-in-from-top-4 duration-200 text-xs">
                     <div class="flex justify-between items-start">
                         <div>
-                            <span class="text-[9px] font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-700 dark:bg-red-500/10 dark:text-red-400 uppercase tracking-wider font-mono">
-                                AI FAILURE ANALYSIS - INSIGHT PANEL
+                            <span class="text-[9px] font-bold px-2 py-0.5 rounded-full {{ $badgeBg }} uppercase tracking-wider font-mono">
+                                @if($status === 'Failed')
+                                    AI FAILURE ANALYSIS - INSIGHT PANEL
+                                @elseif($status === 'Running')
+                                    ETL PIPELINE RUNNING - PROGRESS PANEL
+                                @else
+                                    ETL PIPELINE SUCCESS - LOGS PANEL
+                                @endif
                             </span>
-                            <h3 class="font-extrabold text-slate-900 dark:text-white text-base mt-2 font-mono">
+                            <h3 class="font-extrabold text-slate-900 dark:text-white text-base mt-2 font-mono flex items-center gap-2">
                                 {{ $selectedRun['pipeline']['name'] }} (Run #{{ $selectedRun['id'] }})
+                                @if($status === 'Running')
+                                    <span class="w-2 h-2 rounded-full bg-amber-500 animate-ping"></span>
+                                @endif
                             </h3>
+                            <p class="text-[10px] text-slate-500 mt-1">
+                                Waktu Mulai: <span class="font-mono">{{ date('Y-m-d H:i:s', strtotime($selectedRun['start_time'])) }}</span> 
+                                @if($selectedRun['end_time'])
+                                    | Selesai: <span class="font-mono">{{ date('H:i:s', strtotime($selectedRun['end_time'])) }}</span> 
+                                @endif
+                                | Durasi: <span class="font-mono">{{ $selectedRun['duration_seconds'] ?? 0 }}s</span>
+                            </p>
                         </div>
-                        <button 
-                            wire:click="selectRun(null)"
-                            class="text-slate-400 hover:text-slate-650"
-                        >
-                            &times; Tutup
-                        </button>
+                        <div class="flex items-center gap-3">
+                            @if($status === 'Running')
+                                <button 
+                                    wire:click="forceStopRun({{ $selectedRun['id'] }})"
+                                    class="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-[10px] font-bold transition-all shadow-sm"
+                                >
+                                    Stop Pipeline
+                                </button>
+                            @endif
+                            <button 
+                                wire:click="selectRun(null)"
+                                class="text-slate-400 hover:text-slate-650 text-xs font-bold"
+                            >
+                                &times; Tutup
+                            </button>
+                        </div>
                     </div>
 
-                    <!-- Error Log Snippet -->
-                    <div class="p-3 bg-slate-950 text-red-400 font-mono text-[10px] rounded-lg border border-slate-900 overflow-x-auto select-all leading-relaxed">
-                        {{ $selectedRun['error_log'] ?? 'Unknown connection termination.' }}
+                    <!-- Row Stats Overview -->
+                    <div class="grid grid-cols-3 gap-3 text-center">
+                        <div class="bg-white dark:bg-[#161A25] p-2.5 rounded-lg border border-slate-200 dark:border-slate-800">
+                            <span class="text-[9px] text-slate-500 font-bold block uppercase tracking-wider mb-0.5">Read</span>
+                            <strong class="text-sm font-bold font-mono text-blue-500">{{ number_format($selectedRun['rows_read']) }}</strong>
+                        </div>
+                        <div class="bg-white dark:bg-[#161A25] p-2.5 rounded-lg border border-slate-200 dark:border-slate-800">
+                            <span class="text-[9px] text-slate-500 font-bold block uppercase tracking-wider mb-0.5">Written</span>
+                            <strong class="text-sm font-bold font-mono text-emerald-500">{{ number_format($selectedRun['rows_written']) }}</strong>
+                        </div>
+                        <div class="bg-white dark:bg-[#161A25] p-2.5 rounded-lg border border-slate-200 dark:border-slate-800">
+                            <span class="text-[9px] text-slate-500 font-bold block uppercase tracking-wider mb-0.5">Rejected</span>
+                            <strong class="text-sm font-bold font-mono text-red-500">{{ number_format($selectedRun['rows_rejected']) }}</strong>
+                        </div>
                     </div>
 
-                    @if(!empty($selectedRun['ai_failure_analysis']))
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
-                            <div class="space-y-3">
-                                <div>
-                                    <strong class="text-slate-800 dark:text-slate-300 block mb-0.5 uppercase text-[9px] tracking-wider font-bold">Analisis Penyebab (Root Cause):</strong>
-                                    <p class="text-slate-600 dark:text-slate-400 leading-relaxed font-medium">
-                                        {{ $selectedRun['ai_failure_analysis']['root_cause'] }}
-                                    </p>
+                    @if($status === 'Failed')
+                        <!-- Error Log Snippet -->
+                        <div class="p-3 bg-slate-950 text-red-400 font-mono text-[10px] rounded-lg border border-slate-900 overflow-x-auto select-all leading-relaxed">
+                            {{ $selectedRun['error_log'] ?? 'Unknown connection termination.' }}
+                        </div>
+
+                        @if(!empty($selectedRun['ai_failure_analysis']))
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3 pt-3 border-t border-slate-100 dark:border-slate-850">
+                                <div class="space-y-3">
+                                    <div>
+                                        <strong class="text-slate-800 dark:text-slate-300 block mb-0.5 uppercase text-[9px] tracking-wider font-bold">Analisis Penyebab (Root Cause):</strong>
+                                        <p class="text-slate-600 dark:text-slate-400 leading-relaxed font-medium">
+                                            {{ $selectedRun['ai_failure_analysis']['root_cause'] }}
+                                        </p>
+                                    </div>
+                                    <div>
+                                        <strong class="text-slate-800 dark:text-slate-300 block mb-0.5 uppercase text-[9px] tracking-wider font-bold">Dampak Bisnis:</strong>
+                                        <p class="text-slate-600 dark:text-slate-400 leading-relaxed">
+                                            {{ $selectedRun['ai_failure_analysis']['impact'] }}
+                                        </p>
+                                    </div>
                                 </div>
-                                <div>
-                                    <strong class="text-slate-800 dark:text-slate-300 block mb-0.5 uppercase text-[9px] tracking-wider font-bold">Dampak Bisnis:</strong>
-                                    <p class="text-slate-600 dark:text-slate-400 leading-relaxed">
-                                        {{ $selectedRun['ai_failure_analysis']['impact'] }}
-                                    </p>
+                                
+                                <div class="space-y-3">
+                                    <div>
+                                        <strong class="text-slate-800 dark:text-slate-300 block mb-0.5 uppercase text-[9px] tracking-wider font-bold">Kemungkinan Penyebab:</strong>
+                                        <ul class="list-disc list-inside space-y-1 text-slate-600 dark:text-slate-400">
+                                            @foreach($selectedRun['ai_failure_analysis']['possibilities'] as $pos)
+                                                <li>{{ $pos }}</li>
+                                            @endforeach
+                                        </ul>
+                                    </div>
+                                    <div>
+                                        <strong class="text-indigo-600 dark:text-indigo-400 block mb-0.5 uppercase text-[9px] tracking-wider font-bold">Rekomendasi Tindakan:</strong>
+                                        <ul class="list-disc list-inside space-y-1 text-indigo-700 dark:text-indigo-300 font-medium">
+                                            @foreach($selectedRun['ai_failure_analysis']['recommendations'] as $rec)
+                                                <li>{{ $rec }}</li>
+                                            @endforeach
+                                        </ul>
+                                    </div>
                                 </div>
                             </div>
                             
-                            <div class="space-y-3">
-                                <div>
-                                    <strong class="text-slate-800 dark:text-slate-300 block mb-0.5 uppercase text-[9px] tracking-wider font-bold">Kemungkinan Penyebab:</strong>
-                                    <ul class="list-disc list-inside space-y-1 text-slate-600 dark:text-slate-400">
-                                        @foreach($selectedRun['ai_failure_analysis']['possibilities'] as $pos)
-                                            <li>{{ $pos }}</li>
+                            <div class="mt-4 pt-3 border-t border-slate-200 dark:border-slate-800 flex justify-end">
+                                <button 
+                                    wire:click="autoFixRun({{ $selectedRun['id'] }})"
+                                    class="px-4 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-750 hover:to-indigo-750 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm hover:shadow-md disabled:opacity-50"
+                                    {{ $isFixing ? 'disabled' : '' }}
+                                >
+                                    @if($isFixing)
+                                        <svg class="w-4 h-4 animate-spin text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 7.89"></path></svg>
+                                        Menerapkan Perbaikan...
+                                    @else
+                                        <svg class="w-4 h-4 text-amber-300" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clip-rule="evenodd"></path></svg>
+                                        Auto-Fix dengan AI
+                                    @endif
+                                </button>
+                            </div>
+                        @else
+                            <!-- Loading spinner for diagnostics generation -->
+                            <div class="flex items-center gap-3">
+                                <button 
+                                    wire:click="analyzeFailure({{ $selectedRun['id'] }})"
+                                    class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                                    {{ $isAnalyzing ? 'disabled' : '' }}
+                                >
+                                    @if($isAnalyzing)
+                                        <svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 7.89"></path></svg>
+                                        Menganalisis...
+                                    @else
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path></svg>
+                                        Minta Analisis AI
+                                    @endif
+                                </button>
+
+                                <button 
+                                    wire:click="autoFixRun({{ $selectedRun['id'] }})"
+                                    class="px-4 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-750 hover:to-indigo-750 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm hover:shadow-md disabled:opacity-50"
+                                    {{ $isFixing ? 'disabled' : '' }}
+                                >
+                                    @if($isFixing)
+                                        <svg class="w-4 h-4 animate-spin text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 7.89"></path></svg>
+                                        Menerapkan Perbaikan...
+                                    @else
+                                        <svg class="w-4 h-4 text-amber-300" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clip-rule="evenodd"></path></svg>
+                                        Auto-Fix dengan AI
+                                    @endif
+                                </button>
+                            </div>
+                        @endif
+                    @endif
+
+                    <!-- Step Metrics Table (if available) -->
+                    @if(!empty($selectedRun['step_metrics']))
+                        <div class="space-y-1.5 pt-3 border-t border-slate-100 dark:border-slate-850">
+                            <span class="text-[9px] font-bold text-slate-500 uppercase tracking-wider block">Step Metrics Progress:</span>
+                            <div class="border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
+                                <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-800 text-[10px]">
+                                    <thead class="bg-slate-50 dark:bg-[#161A25]">
+                                        <tr>
+                                            <th class="px-3 py-1.5 text-left font-bold text-slate-500">Step Name</th>
+                                            <th class="px-3 py-1.5 text-right font-bold text-slate-500">Read</th>
+                                            <th class="px-3 py-1.5 text-right font-bold text-slate-500">Written</th>
+                                            <th class="px-3 py-1.5 text-right font-bold text-slate-500">Rejected</th>
+                                            <th class="px-3 py-1.5 text-center font-bold text-slate-500">Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-slate-150 dark:divide-slate-800 font-mono text-[9px] text-slate-600 dark:text-slate-350 bg-white dark:bg-[#12151E]">
+                                        @foreach($selectedRun['step_metrics'] as $key => $sm)
+                                            @php
+                                                $stepName = $sm['step'] ?? $sm['label'] ?? $sm['name'] ?? (is_string($key) ? $key : 'Unknown Step');
+                                                $read = $sm['read'] ?? $sm['input'] ?? 0;
+                                                $written = $sm['written'] ?? $sm['output'] ?? 0;
+                                                $rejected = $sm['rejected'] ?? 0;
+                                                $status = $sm['status'] ?? 'Success';
+                                            @endphp
+                                            <tr>
+                                                <td class="px-3 py-1.5 font-bold">{{ $stepName }}</td>
+                                                <td class="px-3 py-1.5 text-right">{{ number_format($read) }}</td>
+                                                <td class="px-3 py-1.5 text-right">{{ number_format($written) }}</td>
+                                                <td class="px-3 py-1.5 text-right text-red-500">{{ number_format($rejected) }}</td>
+                                                <td class="px-3 py-1.5 text-center">
+                                                    <span class="px-1.5 py-0.5 rounded text-[8px] font-bold {{ $status === 'Success' ? 'bg-emerald-500/10 text-emerald-400' : ($status === 'Running' ? 'bg-amber-500/10 text-amber-400 animate-pulse' : 'bg-red-500/10 text-red-400') }}">
+                                                        {{ $status }}
+                                                    </span>
+                                                </td>
+                                            </tr>
                                         @endforeach
-                                    </ul>
-                                </div>
-                                <div>
-                                    <strong class="text-indigo-600 dark:text-indigo-400 block mb-0.5 uppercase text-[9px] tracking-wider font-bold">Rekomendasi Tindakan:</strong>
-                                    <ul class="list-disc list-inside space-y-1 text-indigo-700 dark:text-indigo-300 font-medium">
-                                        @foreach($selectedRun['ai_failure_analysis']['recommendations'] as $rec)
-                                            <li>{{ $rec }}</li>
-                                        @endforeach
-                                    </ul>
-                                </div>
+                                    </tbody>
+                                </table>
                             </div>
                         </div>
-                    @else
-                        <!-- Loading spinner for diagnostics generation -->
-                        <div class="flex items-center gap-3">
-                            <button 
-                                wire:click="analyzeFailure({{ $selectedRun['id'] }})"
-                                class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50"
-                                {{ $isAnalyzing ? 'disabled' : '' }}
-                            >
-                                @if($isAnalyzing)
-                                    <svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 7.89"></path></svg>
-                                    Menganalisis...
-                                @else
-                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path></svg>
-                                    Minta Analisis AI
-                                @endif
-                            </button>
+                    @endif
+
+                    <!-- Log Output pre -->
+                    @if(!empty($selectedRun['execution_logs']))
+                        <div class="space-y-1.5 pt-3 border-t border-slate-100 dark:border-slate-850">
+                            <span class="text-[9px] text-slate-500 font-bold uppercase tracking-wider block">Terminal Ingestion Logs:</span>
+                            <pre class="bg-black p-3 rounded-lg font-mono text-[10px] text-indigo-300 overflow-y-auto max-h-48 border border-slate-900 text-left select-all whitespace-pre-wrap leading-relaxed shadow-inner">{{ $selectedRun['execution_logs'] }}</pre>
                         </div>
                     @endif
                 </div>
@@ -334,16 +551,27 @@
                                     <td class="px-4 py-3 text-right font-mono">{{ $run['duration_seconds'] }}s</td>
                                     <td class="px-4 py-3 text-right font-mono">{{ number_format($run['rows_read']) }} / {{ number_format($run['rows_written']) }}</td>
                                     <td class="px-4 py-3 text-center">
-                                        @if($run['status'] === 'Failed')
+                                        <div class="flex items-center justify-center gap-2">
                                             <button 
                                                 wire:click="selectRun({{ $run['id'] }})"
-                                                class="text-red-500 dark:text-red-400 hover:underline text-[10px] font-bold"
+                                                class="text-indigo-500 hover:text-indigo-400 dark:text-indigo-400 dark:hover:text-indigo-300 hover:underline text-[10px] font-bold whitespace-nowrap"
                                             >
-                                                Analisis AI
+                                                @if($run['status'] === 'Failed')
+                                                    Analisis AI
+                                                @else
+                                                    Lihat Detail
+                                                @endif
                                             </button>
-                                        @else
-                                            <span class="text-slate-400 font-mono">-</span>
-                                        @endif
+                                            @if($run['status'] === 'Running')
+                                                <span class="text-slate-300 dark:text-slate-700">|</span>
+                                                <button 
+                                                    wire:click="forceStopRun({{ $run['id'] }})"
+                                                    class="text-amber-500 hover:text-amber-400 hover:underline text-[10px] font-bold whitespace-nowrap"
+                                                >
+                                                    Hentikan
+                                                </button>
+                                            @endif
+                                        </div>
                                     </td>
                                 </tr>
                             @empty

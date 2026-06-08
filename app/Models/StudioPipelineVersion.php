@@ -4,13 +4,16 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 
-class StudioPipeline extends Model
+class StudioPipelineVersion extends Model
 {
-    protected $table = 'studio_pipelines';
+    protected $table = 'studio_pipeline_versions';
+
+    public $timestamps = false;
 
     protected $fillable = [
+        'pipeline_id',
+        'version_number',
         'name',
         'source_connection_id',
         'source_table',
@@ -18,7 +21,6 @@ class StudioPipeline extends Model
         'target_connection_id',
         'target_table',
         'column_mapping',
-        'is_active',
         'canvas_data',
         'schedule_interval'
     ];
@@ -29,6 +31,11 @@ class StudioPipeline extends Model
         'canvas_data' => 'array'
     ];
 
+    public function pipeline(): BelongsTo
+    {
+        return $this->belongsTo(StudioPipeline::class, 'pipeline_id');
+    }
+
     public function sourceConnection(): BelongsTo
     {
         return $this->belongsTo(EtlConnection::class, 'source_connection_id');
@@ -37,15 +44,5 @@ class StudioPipeline extends Model
     public function targetConnection(): BelongsTo
     {
         return $this->belongsTo(EtlConnection::class, 'target_connection_id');
-    }
-
-    public function runs(): HasMany
-    {
-        return $this->hasMany(StudioPipelineRun::class, 'pipeline_id');
-    }
-
-    public function versions(): HasMany
-    {
-        return $this->hasMany(StudioPipelineVersion::class, 'pipeline_id')->orderBy('version_number', 'desc');
     }
 }

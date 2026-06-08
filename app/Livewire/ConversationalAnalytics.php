@@ -10,188 +10,256 @@ use App\Models\SourceConnection;
 use App\Models\WarehouseTable;
 use App\Models\EtlPipeline;
 use App\Models\EtlJobRun;
+use App\Models\EtlConnection;
 use App\Models\DataQualityRecommendation;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 
 class ConversationalAnalytics extends Component
 {
     public string $query = '';
     public array $messages = [];
 
+    /** SQL result keyed by message index */
+    public array $queryResults = [];
+
     public function mount(): void
     {
         $this->messages[] = [
             'role'    => 'assistant',
-            'content' => 'Halo! Saya adalah Asisten Data AI Anda. Tanyakan apa saja tentang platform ini — misalnya: *"Tabel apa saja yang ada di DWH?"*, *"Mengapa quality score tabel fact_payment turun?"*, *"Pipeline mana yang mengalami kegagalan eksekusi?"*, atau *"Tuliskan SQL untuk melihat 5 transaksi teratas di fact_sales"*',
+            'content' => 'Halo! Saya adalah **Asisten Data AI** yang kini bisa **query database langsung**. Tanyakan apa saja — *"Customer mana yang punya saldo tertinggi?"*, *"Tampilkan 5 order terakhir"*, atau *"Pipeline mana yang sering gagal?"*',
         ];
     }
 
     public function ask(): void
     {
         $userQuery = trim($this->query);
-        if (empty($userQuery)) {
-            return;
-        }
+        if (empty($userQuery)) return;
 
         $this->messages[] = ['role' => 'user', 'content' => $userQuery];
         $this->query = '';
 
-        $this->messages[] = ['role' => 'assistant', 'content' => $this->callGemini($userQuery)];
-    }
+        // Single API call: AI decides & generates SQL (if needed) in one shot
+        $decision = $this->callGeminiOnce($userQuery);
 
-    private function getDataContext(): string
-    {
-        // 1. Core upload and duplicate detection metrics
-        $totalProjects    = ImportedProject::count();
-        $totalImports     = ImportLog::count();
-        $completedImports = ImportLog::where('status', 'completed')->count();
-        $failedImports    = ImportLog::where('status', 'failed')->count();
-        $totalCandidates  = DuplicateCandidate::count();
-        $highRisk         = DuplicateCandidate::where('confidence_level', 'high')->count();
-        $aiValidated      = DuplicateCandidate::where('ai_validation_status', 'validated')->count();
-        $confirmed        = DuplicateCandidate::where('status', 'confirmed')->count();
-        $rejected         = DuplicateCandidate::where('status', 'rejected')->count();
-        $totalSources     = SourceConnection::count();
-        $duplicateRate    = $totalProjects > 0 ? round(($totalCandidates / $totalProjects) * 100, 2) : 0;
+        $msgIdx    = count($this->messages);
+        $answerText = $decision['answer'] ?? 'Maaf, tidak ada respons.';
 
-        // 2. Data Warehouse Explorer metrics
-        $tablesList = WarehouseTable::orderBy('name')->get()->map(fn($t) => sprintf(
-            '- Tabel "%s" (%s baris, %s kolom, skor kualitas: %s%%, Owner: %s, Deskripsi: %s)',
-            $t->name,
-            number_format($t->row_count),
-            $t->col_count,
-            $t->quality_score,
-            $t->business_owner ?? 'Belum ada owner',
-            $t->description ?? 'Belum didokumentasikan'
-        ))->implode("\n");
+        if (!empty($decision['sql'])) {
+            // Execute the SQL
+            $execResult = $this->executeSql($decision['sql'], $decision['connection_id'] ?? null);
 
-        // 3. ETL Job Monitoring metrics
-        $pipelinesCount = EtlPipeline::count();
-        $failedRunsCount = EtlJobRun::where('status', 'Failed')->count();
-        $recentRuns = EtlJobRun::with('pipeline')->orderBy('start_time', 'desc')->limit(3)->get()->map(fn($r) => sprintf(
-            '- Pipeline "%s" (Status: %s, Waktu: %s, Durasi: %ss, Baris: %s, Pesan Error: %s)',
-            $r->pipeline->name,
-            $r->status,
-            $r->start_time->format('H:i:s d-M'),
-            $r->duration_seconds,
-            number_format($r->rows_processed),
-            $r->error_message ?? 'Tidak ada'
-        ))->implode("\n");
-
-        // 4. Data Quality Recommendations
-        $recs = DataQualityRecommendation::orderBy('priority_level', 'desc')->limit(4)->get()->map(fn($r) => sprintf(
-            '- Tabel "%s": Isu "%s" (Skor Penalti: %s%%, Dampak: %s, Prioritas: %s)',
-            $r->table_name,
-            $r->finding_type,
-            $r->quality_score_impact,
-            $r->business_impact,
-            $r->priority_level
-        ))->implode("\n");
-
-        return <<<CONTEXT
-        DATA PLATFORM METADATA DAN STATISTIK:
-        
-        [1] DATA WAREHOUSE TABLES:
-        {$tablesList}
-
-        [2] PIPELINE ETL MONITORING:
-        - Jumlah Pipeline Terdaftar: {$pipelinesCount}
-        - Total Job Gagal Saat Ini: {$failedRunsCount}
-        - 3 Riwayat Eksekusi ETL Terakhir:
-        {$recentRuns}
-
-        [3] REKOMENDASI KUALITAS DATA AKTIF:
-        {$recs}
-
-        [4] DATA PROYEK & DUPLIKASI (UNGGAHAN CSV):
-        - Total proyek terunggah: {$totalProjects}
-        - Total sesi impor: {$totalImports} (Selesai: {$completedImports}, Gagal: {$failedImports})
-        - Jumlah Sumber Data: {$totalSources}
-        - Total Kandidat Duplikat Terdeteksi: {$totalCandidates} (Level Risiko Tinggi: {$highRisk})
-        - Status Duplikasi: Konfirmasi: {$confirmed}, Ditolak: {$rejected}, Divalidasi AI: {$aiValidated}
-        - Rata-rata Duplikasi: {$duplicateRate}%
-        CONTEXT;
-    }
-
-    private function callGemini(string $userQuestion): string
-    {
-        $apiKey = config('services.gemini.key', env('GEMINI_API_KEY'));
-
-        if (empty($apiKey)) {
-            return 'Gemini API Key belum dikonfigurasi. Silakan tambahkan GEMINI_API_KEY di file .env Anda.';
-        }
-
-        $dataContext = $this->getDataContext();
-
-        // Build conversation history (keep last 6 turns)
-        $recentMessages = array_slice($this->messages, -7, 6);
-        $conversationHistory = [];
-        foreach ($recentMessages as $msg) {
-            if ($msg['role'] === 'user') {
-                $conversationHistory[] = ['role' => 'user', 'parts' => [['text' => $msg['content']]]];
-            } elseif ($msg['role'] === 'assistant' && isset($msg['content'])) {
-                $conversationHistory[] = ['role' => 'model', 'parts' => [['text' => $msg['content']]]];
-            }
-        }
-
-        $systemPrompt = <<<PROMPT
-        Anda adalah "AI Data Platform Assistant", asisten analitik data cerdas profesional yang tertanam dalam platform pengawasan kualitas data dan data warehouse pengguna.
-        
-        Tugas Anda adalah menjawab pertanyaan pengguna secara akurat berdasarkan konteks metadata platform di bawah ini.
-
-        KONTEKS DATA PLATFORM SAAT INI:
-        {$dataContext}
-
-        ATURAN MENJAWAB:
-        1. Jawab SELALU dalam Bahasa Indonesia yang sopan, ramah, dan profesional.
-        2. Gunakan data statistik di atas sebagai satu-satunya kebenaran (source of truth). Jangan mengarang data.
-        3. Jika ditanya tentang kegagalan pipeline, jelaskan penyebab error dan rekomendasi berdasarkan data di atas.
-        4. Jika diminta membuat query SQL untuk melihat data di dim_customer, dim_product, fact_sales, atau fact_payment, berikan kueri SQL PostgreSQL yang akurat.
-        5. Gunakan format Markdown (**bold**, lists, dsb) agar jawaban terstruktur dan mudah dibaca.
-        6. Jawaban harus ringkas namun informatif (maksimal 3 paragraf).
-        PROMPT;
-
-        try {
-            $payload = [
-                'system_instruction' => [
-                    'parts' => [['text' => $systemPrompt]]
-                ],
-                'contents' => array_merge(
-                    $conversationHistory,
-                    [['role' => 'user', 'parts' => [['text' => $userQuestion]]]]
-                ),
-                'generationConfig' => [
-                    'temperature'     => 0.4,
-                    'maxOutputTokens' => 1024,
-                ],
+            $this->queryResults[$msgIdx] = [
+                'sql'   => $decision['sql'],
+                'rows'  => $execResult['rows'] ?? [],
+                'cols'  => $execResult['cols'] ?? [],
+                'error' => $execResult['error'] ?? null,
+                'count' => $execResult['count'] ?? 0,
             ];
 
-            $response = Http::timeout(30)
+            // Append data summary to the answer if AI didn't already mention it
+            if (!empty($execResult['error'])) {
+                $answerText .= "\n\n⚠️ *Catatan: Query gagal dieksekusi — " . $execResult['error'] . "*";
+            } elseif (empty($execResult['rows'])) {
+                $answerText .= "\n\n*Query dieksekusi namun tidak mengembalikan data.*";
+            }
+
+            $this->messages[] = ['role' => 'assistant', 'content' => $answerText, 'has_result' => $msgIdx];
+        } else {
+            $this->messages[] = ['role' => 'assistant', 'content' => $answerText];
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // SINGLE Gemini call — returns both answer text AND sql (if needed)
+    // ─────────────────────────────────────────────────────────────
+    private function callGeminiOnce(string $userQuestion): array
+    {
+        $apiKey = config('services.gemini.key', env('GEMINI_API_KEY'));
+        if (empty($apiKey)) {
+            return ['answer' => '❌ GEMINI_API_KEY belum dikonfigurasi di .env.', 'sql' => null];
+        }
+
+        $schemaContext = $this->buildSchemaContext();
+        $dataContext   = $this->getDataContext();
+        $historyText   = $this->buildHistoryText();
+
+        $systemPrompt = <<<PROMPT
+Anda adalah "AI Data Platform Assistant" — asisten analitik data cerdas yang tertanam dalam platform pengawasan kualitas data dan data warehouse.
+
+SKEMA DATABASE (ETL Connections aktif):
+{$schemaContext}
+
+METADATA PLATFORM:
+{$dataContext}
+
+RIWAYAT PERCAKAPAN TERAKHIR:
+{$historyText}
+
+TUGAS DAN FORMAT RESPONS:
+Analisis pertanyaan pengguna. Kembalikan HANYA satu objek JSON valid (tanpa markdown fence, tanpa komentar):
+
+Jika pertanyaan memerlukan data aktual dari database (misal: siapa X terbesar, tampilkan record, hitung jumlah, dll):
+{
+  "needs_sql": true,
+  "sql": "SELECT ... FROM ... LIMIT 20",
+  "connection_id": <integer id koneksi atau null>,
+  "answer": "<jawaban dalam Bahasa Indonesia yang menjelaskan SQL apa yang dijalankan dan apa yang diharapkan, format Markdown>"
+}
+
+Jika pertanyaan bisa dijawab dari metadata platform atau bersifat umum:
+{
+  "needs_sql": false,
+  "sql": null,
+  "connection_id": null,
+  "answer": "<jawaban lengkap dalam Bahasa Indonesia, format Markdown, maksimal 3 paragraf>"
+}
+
+ATURAN SQL:
+- Hanya boleh SELECT. DILARANG: INSERT, UPDATE, DELETE, DROP, TRUNCATE, ALTER.
+- Selalu sertakan LIMIT 20.
+- Gunakan HANYA nama tabel dan kolom yang ADA di skema di atas.
+- Jika tidak yakin tabel/kolom ada, kembalikan needs_sql: false.
+
+ATURAN JAWABAN:
+- Selalu Bahasa Indonesia yang sopan dan profesional.
+- Gunakan Markdown (**bold**, list, *italic*).
+- Jangan mengarang data yang tidak ada di metadata atau hasil query.
+PROMPT;
+
+        try {
+            $response = Http::timeout(25)
                 ->withHeaders(['Content-Type' => 'application/json'])
                 ->post(
-                    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' . $apiKey,
-                    $payload
+                    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' . $apiKey,
+                    [
+                        'system_instruction' => ['parts' => [['text' => $systemPrompt]]],
+                        'contents' => [['role' => 'user', 'parts' => [['text' => $userQuestion]]]],
+                        'generationConfig' => [
+                            'temperature'     => 0.2,
+                            'maxOutputTokens' => 1024,
+                        ],
+                    ]
                 );
 
             if ($response->successful()) {
-                $data = $response->json();
-                return $data['candidates'][0]['content']['parts'][0]['text']
-                    ?? 'Maaf, saya tidak dapat menghasilkan respons saat ini.';
+                $raw = $response->json('candidates.0.content.parts.0.text', '{}');
+                // Strip possible markdown code fences
+                $raw = trim(preg_replace('/^```(?:json)?\s*/i', '', $raw));
+                $raw = preg_replace('/\s*```\s*$/i', '', $raw);
+
+                $decoded = json_decode($raw, true);
+                if (is_array($decoded) && isset($decoded['answer'])) {
+                    return $decoded;
+                }
+                // If JSON parsing failed, return raw text as answer
+                return ['answer' => $raw ?: 'Maaf, tidak ada respons.', 'sql' => null];
             }
 
             Log::error('Gemini chat error', ['status' => $response->status(), 'body' => $response->body()]);
 
             if ($response->status() === 429) {
-                return '⚠️ Layanan AI sedang sibuk (batas permintaan tercapai). Harap tunggu **10-15 detik** lalu coba lagi.';
+                return ['answer' => '⚠️ Layanan AI sedang sibuk (batas permintaan tercapai). Harap tunggu **30 detik** lalu coba lagi.', 'sql' => null];
             }
 
-            return 'Terjadi kesalahan saat menghubungi AI (kode: ' . $response->status() . '). Silakan coba lagi.';
+            return ['answer' => 'Terjadi kesalahan API (kode: ' . $response->status() . '). Silakan coba lagi.', 'sql' => null];
 
         } catch (\Exception $e) {
-            Log::error('Gemini chat exception: ' . $e->getMessage());
-            return 'Koneksi ke layanan AI gagal: ' . $e->getMessage();
+            Log::error('Gemini exception: ' . $e->getMessage());
+            return ['answer' => 'Koneksi ke layanan AI gagal: ' . $e->getMessage(), 'sql' => null];
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Execute SQL safely (SELECT only, max 20 rows)
+    // ─────────────────────────────────────────────────────────────
+    private function executeSql(?string $sql, ?int $connectionId): array
+    {
+        if (empty($sql)) {
+            return ['rows' => [], 'cols' => [], 'error' => 'Query SQL kosong.', 'count' => 0];
+        }
+
+        // Safety: only allow SELECT
+        if (!preg_match('/^\s*SELECT\s/i', $sql)) {
+            return ['rows' => [], 'cols' => [], 'error' => 'Hanya SELECT yang diperbolehkan.', 'count' => 0];
+        }
+
+        // Ensure LIMIT is present
+        if (!preg_match('/\bLIMIT\s+\d+/i', $sql)) {
+            $sql = rtrim($sql, '; ') . ' LIMIT 20';
+        }
+
+        try {
+            if ($connectionId) {
+                $conn = EtlConnection::find($connectionId);
+                $dbConn = $conn ? $conn->getDatabaseConnection() : DB::connection();
+            } else {
+                $active = EtlConnection::where('status', 'active')->first();
+                $dbConn = $active ? $active->getDatabaseConnection() : DB::connection();
+            }
+
+            $results = $dbConn->select($sql);
+            $rows    = array_map(fn($r) => (array) $r, $results);
+            $cols    = !empty($rows) ? array_keys($rows[0]) : [];
+
+            return ['rows' => $rows, 'cols' => $cols, 'error' => null, 'count' => count($rows)];
+        } catch (\Exception $e) {
+            Log::warning('SQL exec error: ' . $e->getMessage());
+            return ['rows' => [], 'cols' => [], 'error' => $e->getMessage(), 'count' => 0];
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Helpers
+    // ─────────────────────────────────────────────────────────────
+    private function buildSchemaContext(): string
+    {
+        $connections = EtlConnection::where('status', 'active')->get();
+        if ($connections->isEmpty()) return 'Tidak ada koneksi aktif.';
+
+        return $connections->map(function ($conn) {
+            $meta   = $conn->metadata ?? [];
+            $tables = array_merge($meta['tables'] ?? [], $meta['views'] ?? []);
+            $tLines = array_map(function ($t) {
+                $cols = is_array($t['columns']) ? implode(', ', $t['columns']) : $t['columns'];
+                return "  - {$t['name']}({$cols})";
+            }, $tables);
+            return "Koneksi #{$conn->id} [{$conn->name}] Driver:{$conn->driver}\n" . implode("\n", $tLines);
+        })->implode("\n\n");
+    }
+
+    private function getDataContext(): string
+    {
+        $totalCandidates = DuplicateCandidate::count();
+        $highRisk        = DuplicateCandidate::where('confidence_level', 'high')->count();
+        $confirmed       = DuplicateCandidate::where('status', 'confirmed')->count();
+
+        $tablesList = WarehouseTable::orderBy('name')->get()->map(fn($t) => sprintf(
+            '- "%s": %s baris, %s kolom, kualitas %s%%',
+            $t->name, number_format($t->row_count), $t->col_count, $t->quality_score
+        ))->implode("\n");
+
+        $failedRuns  = EtlJobRun::where('status', 'Failed')->count();
+        $recentRuns  = EtlJobRun::with('pipeline')->orderBy('start_time', 'desc')->limit(3)->get()->map(fn($r) =>
+            "- {$r->pipeline->name}: {$r->status}, error: " . ($r->error_message ?? 'OK')
+        )->implode("\n");
+
+        return <<<CTX
+[WAREHOUSE]: {$tablesList}
+[ETL RUNS]: {$failedRuns} gagal, 3 terakhir:
+{$recentRuns}
+[DUPLIKASI]: {$totalCandidates} kandidat, {$highRisk} risiko tinggi, {$confirmed} dikonfirmasi
+CTX;
+    }
+
+    private function buildHistoryText(): string
+    {
+        $recent = array_slice($this->messages, -5);
+        return implode("\n", array_map(
+            fn($m) => ($m['role'] === 'user' ? 'User' : 'AI') . ': ' . mb_substr(strip_tags($m['content']), 0, 200),
+            $recent
+        ));
     }
 
     public function render()

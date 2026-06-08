@@ -93,18 +93,34 @@ class StudioConnections extends Component
         $this->testResult = null;
 
         // Simulate network delay
-        usleep(800000); // 0.8s
+        usleep(400000);
 
-        // Live connection checking for pgsql local
-        if ($this->driver === 'pgsql') {
-            if (($this->config['host'] ?? '') === 'localhost' || ($this->config['database'] ?? '') === 'postgres') {
+        try {
+            if ($this->driver === 'pgsql' || $this->driver === 'mysql') {
+                $connName = 'dynamic_test_connection';
+                config([
+                    "database.connections.{$connName}" => [
+                        'driver' => $this->driver,
+                        'host' => $this->config['host'] ?? 'localhost',
+                        'port' => $this->config['port'] ?? ($this->driver === 'pgsql' ? '5432' : '3306'),
+                        'database' => $this->config['database'] ?? '',
+                        'username' => $this->config['username'] ?? '',
+                        'password' => $this->config['password'] ?? '',
+                        'charset' => 'utf8',
+                        'prefix' => '',
+                        'sslmode' => 'prefer',
+                    ]
+                ]);
+
+                \Illuminate\Support\Facades\DB::purge($connName);
+                \Illuminate\Support\Facades\DB::connection($connName)->getPdo();
                 $this->testResult = 'success';
             } else {
-                $this->testResult = 'success'; // Simulasikan sukses juga untuk demo
+                $this->testResult = 'success';
             }
-        } else {
-            // Simulated driver success
-            $this->testResult = 'success';
+        } catch (\Exception $e) {
+            Log::error("StudioConnections::testConnection error: " . $e->getMessage());
+            $this->testResult = 'failed';
         }
 
         $this->isTesting = false;
@@ -115,8 +131,16 @@ class StudioConnections extends Component
         $this->validate();
 
         try {
-            // Generate mock metadata on save
-            $metadata = $this->generateMockMetadata($this->driver, $this->name);
+            // Try to scan physical metadata first if database driver
+            $metadata = null;
+            if ($this->driver === 'pgsql' || $this->driver === 'mysql') {
+                $metadata = $this->scanDatabaseMetadata($this->driver, $this->config);
+            }
+
+            // Fallback to mock metadata if scan failed or not DB
+            if (!$metadata) {
+                $metadata = $this->generateMockMetadata($this->driver, $this->name);
+            }
 
             $data = [
                 'name' => $this->name,
@@ -130,7 +154,7 @@ class StudioConnections extends Component
             if ($this->isEditing) {
                 $conn = EtlConnection::findOrFail($this->selectedConnectionId);
                 $conn->update($data);
-                session()->flash('message', "Koneksi '{$this->name}' berhasil diperbarui.");
+                session()->flash('message', "Koneksi '{$this->name}' berhasil diperbarui dan dipindai ulang.");
             } else {
                 EtlConnection::create($data);
                 session()->flash('message', "Koneksi '{$this->name}' berhasil dibuat dan ter-scan otomatis.");
@@ -223,6 +247,128 @@ class StudioConnections extends Component
                 ]
             ]
         ];
+    }
+
+    protected function scanDatabaseMetadata(string $driver, array $config): ?array
+    {
+        if (!in_array($driver, ['pgsql', 'mysql'])) {
+            return null;
+        }
+
+        $connName = 'dynamic_scan_connection';
+
+        try {
+            // Set dynamic config
+            config([
+                "database.connections.{$connName}" => [
+                    'driver' => $driver,
+                    'host' => $config['host'] ?? 'localhost',
+                    'port' => $config['port'] ?? ($driver === 'pgsql' ? '5432' : '3306'),
+                    'database' => $config['database'] ?? '',
+                    'username' => $config['username'] ?? '',
+                    'password' => $config['password'] ?? '',
+                    'charset' => 'utf8',
+                    'prefix' => '',
+                    'sslmode' => 'prefer',
+                ]
+            ]);
+
+            \Illuminate\Support\Facades\DB::purge($connName);
+
+            // Test connection
+            \Illuminate\Support\Facades\DB::connection($connName)->getPdo();
+
+            // Fetch tables and columns
+            if ($driver === 'pgsql') {
+                $query = "
+                    SELECT 
+                        table_schema, 
+                        table_name, 
+                        column_name
+                    FROM 
+                        information_schema.columns
+                    WHERE 
+                        table_schema NOT IN ('information_schema', 'pg_catalog')
+                    ORDER BY 
+                        table_schema, 
+                        table_name, 
+                        ordinal_position;
+                ";
+            } else {
+                // MySQL
+                $query = "
+                    SELECT 
+                        table_schema, 
+                        table_name, 
+                        column_name
+                    FROM 
+                        information_schema.columns
+                    WHERE 
+                        table_schema = DATABASE()
+                    ORDER BY 
+                        table_name, 
+                        ordinal_position;
+                ";
+            }
+
+            $rows = \Illuminate\Support\Facades\DB::connection($connName)->select($query);
+
+            if (empty($rows)) {
+                return null;
+            }
+
+            // Group by schema and table
+            $tablesData = [];
+            foreach ($rows as $row) {
+                $row = (array) $row;
+                $schema = $row['table_schema'] ?? '';
+                $tableName = $row['table_name'];
+                $columnName = $row['column_name'];
+
+                // Prefix table with schema for non-default or pgsql multiple schemas
+                $fullName = ($driver === 'pgsql' && $schema !== 'public' && !empty($schema)) 
+                    ? "{$schema}.{$tableName}" 
+                    : ($driver === 'pgsql' && $schema === 'public' ? "public.{$tableName}" : $tableName);
+                
+                if (!isset($tablesData[$fullName])) {
+                    $tablesData[$fullName] = [
+                        'name' => $fullName,
+                        'type' => 'Table',
+                        'row_count' => 0,
+                        'columns' => []
+                    ];
+                }
+                $tablesData[$fullName]['columns'][] = $columnName;
+            }
+
+            // Estimate row counts safely
+            foreach ($tablesData as $fullName => &$t) {
+                try {
+                    // Split schema and table for safe quoting
+                    $parts = explode('.', $fullName);
+                    if (count($parts) === 2) {
+                        $countQuery = "SELECT COUNT(*) as count FROM \"" . $parts[0] . "\".\"" . $parts[1] . "\"";
+                    } else {
+                        $countQuery = "SELECT COUNT(*) as count FROM \"" . $fullName . "\"";
+                    }
+                    $countResult = \Illuminate\Support\Facades\DB::connection($connName)->select($countQuery);
+                    $t['row_count'] = $countResult[0]->count ?? 0;
+                } catch (\Exception $e) {
+                    $t['row_count'] = 0;
+                }
+            }
+
+            return [
+                'tables' => array_values($tablesData),
+                'views' => []
+            ];
+
+        } catch (\Exception $e) {
+            Log::error("StudioConnections::scanDatabaseMetadata error: " . $e->getMessage());
+            return null;
+        } finally {
+            \Illuminate\Support\Facades\DB::disconnect($connName);
+        }
     }
 
     public function render()

@@ -7,18 +7,89 @@ use App\Models\StudioPipeline;
 use App\Models\EtlConnection;
 use App\Services\GeminiService;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 
 class StudioAssistant extends Component
 {
     public string $prompt = '';
     public bool $isGenerating = false;
-    public $generatedPlan = null; // Stores parsed output from Gemini/fallback
+    public $generatedPlan = null;
     public string $errorMessage = '';
     public string $successMessage = '';
 
+    // Metadata Scanner and Selection properties
+    public $connectionsList = [];
+    public $sourceConnectionId = null;
+    public $databaseMetadata = [];
+    
+    // Scheduling properties
+    public string $scheduleInterval = 'manual';
+    public string $customCron = '';
+    
+    // Tabbed Result Preview property
+    public string $activeTab = 'visual';
+
     protected array $rules = [
-        'prompt' => 'required|min:10'
+        'prompt' => 'required|min:10',
+        'sourceConnectionId' => 'required'
     ];
+
+    protected array $messages = [
+        'sourceConnectionId.required' => 'Silakan pilih koneksi database sumber terlebih dahulu.'
+    ];
+
+    public function mount(): void
+    {
+        $this->loadConnections();
+    }
+
+    public function loadConnections(): void
+    {
+        $this->connectionsList = EtlConnection::where('status', 'active')
+            ->orderBy('name')
+            ->get()
+            ->toArray();
+
+        if (!empty($this->connectionsList)) {
+            $this->sourceConnectionId = $this->connectionsList[0]['id'];
+            $this->updatedSourceConnectionId($this->sourceConnectionId);
+        }
+    }
+
+    public function updatedSourceConnectionId($value): void
+    {
+        $conn = EtlConnection::find($value);
+        if ($conn) {
+            $meta = $conn->metadata ?? [];
+            $tables = [];
+            
+            foreach (array_merge($meta['tables'] ?? [], $meta['views'] ?? []) as $t) {
+                $columns = [];
+                if (!empty($t['columns'])) {
+                    $cols = is_array($t['columns']) ? $t['columns'] : array_map('trim', explode(',', $t['columns']));
+                    foreach ($cols as $c) {
+                        $columns[] = [
+                            'name' => $c,
+                            'type' => str_contains(strtolower($c), 'id') ? 'bigint' : 'varchar',
+                            'pk' => str_contains(strtolower($c), 'id') || str_contains(strtolower($c), 'key')
+                        ];
+                    }
+                }
+                
+                $tables[] = [
+                    'table' => $t['name'],
+                    'columns' => $columns
+                ];
+            }
+
+            $this->databaseMetadata = [
+                'schema' => strtolower($conn->driver) === 'pgsql' ? 'public' : 'dbo',
+                'tables' => $tables
+            ];
+        } else {
+            $this->databaseMetadata = [];
+        }
+    }
 
     public function generatePipeline(): void
     {
@@ -30,10 +101,30 @@ class StudioAssistant extends Component
 
         try {
             $gemini = app(GeminiService::class);
-            $plan = $gemini->generateEtlStudioPipeline($this->prompt);
+
+            // Construct connection context from all active connections
+            $connectionContext = [];
+            $allConnections = EtlConnection::where('status', 'active')->get();
+            foreach ($allConnections as $conn) {
+                $meta = $conn->metadata ?? [];
+                $tablesSummary = [];
+                foreach (array_merge($meta['tables'] ?? [], $meta['views'] ?? []) as $t) {
+                    $cols = is_array($t['columns']) ? implode(', ', $t['columns']) : $t['columns'];
+                    $tablesSummary[] = ['name' => $t['name'], 'columns' => $cols, 'rows' => $t['row_count'] ?? 0];
+                }
+                $connectionContext[] = [
+                    'id'     => $conn->id,
+                    'name'   => $conn->name,
+                    'driver' => $conn->driver,
+                    'tables' => $tablesSummary,
+                ];
+            }
+
+            $plan = $gemini->generateEtlStudioPipeline($this->prompt, $connectionContext);
 
             if ($plan && !empty($plan['pipeline_name'])) {
                 $this->generatedPlan = $plan;
+                $this->activeTab = 'visual';
             } else {
                 $this->errorMessage = 'Gagal menghasilkan pipeline. Coba ubah atau perjelas deskripsi Anda.';
             }
@@ -50,16 +141,20 @@ class StudioAssistant extends Component
         if (!$this->generatedPlan) return;
 
         try {
-            $likeOperator = \Illuminate\Support\Facades\DB::getDriverName() === 'pgsql' ? 'ilike' : 'like';
+            $likeOperator = DB::getDriverName() === 'pgsql' ? 'ilike' : 'like';
+            $planSrcName = $this->generatedPlan['source_connection_name'] ?? '';
+            $planTgtName = $this->generatedPlan['target_connection_name'] ?? '';
 
-            // Find or fallback source connection
-            $sourceConn = EtlConnection::where('name', $likeOperator, '%' . ($this->generatedPlan['source_connection_name'] ?? '') . '%')->first()
+            // Find source connection
+            $sourceConn = EtlConnection::where('name', $planSrcName)->first()
+                ?? EtlConnection::where('name', $likeOperator, '%' . $planSrcName . '%')->first()
                 ?? EtlConnection::where('type', 'Database')->first()
                 ?? EtlConnection::first();
 
-            // Find or fallback target connection
-            $targetConn = EtlConnection::where('name', $likeOperator, '%' . ($this->generatedPlan['target_connection_name'] ?? '') . '%')->first()
-                ?? EtlConnection::where('name', 'PostgreSQL Data Warehouse')->first()
+            // Find target connection
+            $targetConn = EtlConnection::where('name', $planTgtName)->first()
+                ?? EtlConnection::where('name', $likeOperator, '%' . $planTgtName . '%')->first()
+                ?? EtlConnection::where('type', 'Database')->whereKeyNot($sourceConn?->id)->first()
                 ?? EtlConnection::first();
 
             if (!$sourceConn || !$targetConn) {
@@ -76,15 +171,112 @@ class StudioAssistant extends Component
                 ];
             }
 
+            // ── Generate Visual Canvas Nodes and Connections ─────────────────
+            $nodes = [];
+            $connections = [];
+            
+            // 1. Source Node
+            $srcDriver = strtolower($sourceConn->driver);
+            $srcNodeName = match($srcDriver) {
+                'pgsql' => 'PostgreSQL Input',
+                'mysql' => 'MySQL Input',
+                'oracle' => 'Oracle Input',
+                'csv' => 'CSV Input',
+                'excel' => 'Excel Input',
+                'sharepoint' => 'SharePoint File Input',
+                default => 'Table Input'
+            };
+            $nodes[] = [
+                'id' => 'source',
+                'label' => $srcNodeName,
+                'type' => 'input',
+                'name' => 'source',
+                'x' => 50,
+                'y' => 150
+            ];
+            
+            // 2. Transformations Nodes
+            $prevNodeId = 'source';
+            $transforms = $this->generatedPlan['transformations'] ?? [];
+            foreach ($transforms as $idx => $t) {
+                $nodeId = 'trans_' . $idx;
+                $nodes[] = [
+                    'id' => $nodeId,
+                    'label' => $t,
+                    'type' => 'transform',
+                    'name' => $t,
+                    'x' => 220 + ($idx * 170),
+                    'y' => 150
+                ];
+                
+                $connections[] = [
+                    'fromNodeId' => $prevNodeId,
+                    'fromPortType' => 'out',
+                    'toNodeId' => $nodeId,
+                    'toPortType' => 'in'
+                ];
+                $prevNodeId = $nodeId;
+            }
+            
+            // 3. Target Node
+            $tgtDriver = strtolower($targetConn->driver);
+            $tgtNodeName = match($tgtDriver) {
+                'pgsql' => 'PostgreSQL Output',
+                'mysql' => 'MySQL Output',
+                'oracle' => 'Oracle Output',
+                'csv' => 'CSV Output',
+                'excel' => 'Excel Output',
+                default => 'Table Output'
+            };
+            $nodes[] = [
+                'id' => 'target',
+                'label' => $tgtNodeName,
+                'type' => 'output',
+                'name' => 'target',
+                'x' => 220 + (count($transforms) * 170),
+                'y' => 150
+            ];
+            
+            $connections[] = [
+                'fromNodeId' => $prevNodeId,
+                'fromPortType' => 'out',
+                'toNodeId' => 'target',
+                'toPortType' => 'in'
+            ];
+
+            $canvasData = [
+                'nodes' => $nodes,
+                'connections' => $connections,
+                'panX' => 0,
+                'panY' => 0
+            ];
+
+            // Resolve schedule interval
+            $schedule = $this->scheduleInterval;
+            if ($schedule === 'custom') {
+                $schedule = $this->customCron ?: 'manual';
+            }
+
+            // Resolve unique name
+            $baseName = $this->generatedPlan['pipeline_name'] ?? 'etl_studio_pipeline';
+            $name = $baseName;
+            $counter = 1;
+            while (StudioPipeline::where('name', $name)->exists()) {
+                $name = $baseName . '_' . $counter;
+                $counter++;
+            }
+
             $pipeline = StudioPipeline::create([
-                'name' => $this->generatedPlan['pipeline_name'],
+                'name' => $name,
                 'source_connection_id' => $sourceConn->id,
                 'source_table' => $this->generatedPlan['source_table'] ?? 'customers_raw',
                 'transformations' => $this->generatedPlan['transformations'] ?? [],
                 'target_connection_id' => $targetConn->id,
                 'target_table' => $this->generatedPlan['target_table'] ?? 'dim_customer',
                 'column_mapping' => $mapping,
-                'is_active' => 'active'
+                'is_active' => 'active',
+                'canvas_data' => $canvasData,
+                'schedule_interval' => $schedule
             ]);
 
             $this->successMessage = "✅ Pipeline '{$pipeline->name}' berhasil disimpan ke sistem! Anda sekarang dapat menjalankannya di submenu Pipeline Runs.";

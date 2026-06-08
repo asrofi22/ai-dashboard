@@ -162,9 +162,9 @@
                                 </div>
                                 <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Tidak Ada Kandidat</h3>
                                 <p class="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-sm">Data master Anda terlihat bersih atau tidak ada data yang cocok dengan filter saat ini.</p>
-                                <button onclick="document.querySelector('[x-data]').__x.$data.activeTab = 'upload'" class="mt-4 px-4 py-2 text-xs font-medium text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100 dark:text-indigo-400 dark:bg-indigo-500/10 dark:hover:bg-indigo-500/20 transition-colors">
+                                <a href="{{ route('upload') }}" class="mt-4 px-4 py-2 text-xs font-medium text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100 dark:text-indigo-400 dark:bg-indigo-500/10 dark:hover:bg-indigo-500/20 transition-colors inline-block">
                                     Mulai Impor Data
-                                </button>
+                                </a>
                             </div>
                         </td>
                     </tr>
