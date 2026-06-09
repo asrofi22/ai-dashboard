@@ -36,15 +36,26 @@ class AirflowDagTest extends TestCase
         $this->assertStringContainsString("'@daily'", $pythonCode);
 
         // Assert mapped operators are defined
-        $this->assertStringContainsString('extract_invoices_raw', $pythonCode);
-        $this->assertStringContainsString('transform_select_values_1', $pythonCode);
-        $this->assertStringContainsString('transform_formula_2', $pythonCode);
-        $this->assertStringContainsString('transform_filter_rows_3', $pythonCode);
+        $this->assertStringContainsString('validate_source_invoices_raw', $pythonCode);
         $this->assertStringContainsString('load_fact_sales', $pythonCode);
+        $this->assertStringContainsString('validate_target_fact_sales', $pythonCode);
+
+        // Assert SQLExecuteQueryOperator is utilized instead of dummy PythonOperator
+        $this->assertStringContainsString('SQLExecuteQueryOperator', $pythonCode);
+        $this->assertStringNotContainsString('PythonOperator', $pythonCode);
+
+        // Assert actual executable SQL queries are generated
+        $this->assertStringContainsString('SELECT', $pythonCode);
+        $this->assertStringContainsString('FROM invoices_raw', $pythonCode);
+        $this->assertStringContainsString('INSERT INTO fact_sales', $pythonCode);
+
+        // Assert HTML boundaries from Livewire Blade compilation are absent
+        $this->assertStringNotContainsString('<!--[if BLOCK]-->', $pythonCode);
+        $this->assertStringNotContainsString('<!--[if ENDBLOCK]-->', $pythonCode);
 
         // Assert sequential dependencies flow is defined
         $this->assertStringContainsString(
-            'extract_invoices_raw >> transform_select_values_1 >> transform_formula_2 >> transform_filter_rows_3 >> load_fact_sales',
+            'validate_source_invoices_raw >> load_fact_sales >> validate_target_fact_sales',
             $pythonCode
         );
     }
@@ -79,8 +90,9 @@ class AirflowDagTest extends TestCase
         $content = $response->streamedContent();
         $this->assertStringContainsString('download_test_pipeline_dag', $content);
         $this->assertStringContainsString("'@hourly'", $content);
-        $this->assertStringContainsString('extract_source_table_abc', $content);
+        $this->assertStringContainsString('validate_source_source_table_abc', $content);
         $this->assertStringContainsString('load_target_table_xyz', $content);
+        $this->assertStringContainsString('validate_target_target_table_xyz', $content);
     }
 
     public function test_download_draft_pipeline_dag_route()
@@ -99,9 +111,8 @@ class AirflowDagTest extends TestCase
 
         $content = $response->streamedContent();
         $this->assertStringContainsString('assistant_draft_pipeline_dag', $content);
-        $this->assertStringContainsString('extract_draft_src', $content);
-        $this->assertStringContainsString('transform_select_values_1', $content);
-        $this->assertStringContainsString('transform_filter_rows_2', $content);
+        $this->assertStringContainsString('validate_source_draft_src', $content);
         $this->assertStringContainsString('load_draft_tgt', $content);
+        $this->assertStringContainsString('validate_target_draft_tgt', $content);
     }
 }

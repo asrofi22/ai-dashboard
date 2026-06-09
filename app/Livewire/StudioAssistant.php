@@ -366,6 +366,15 @@ class StudioAssistant extends Component
         }
     }
 
+    public function getSqlQueryPreview(): string
+    {
+        if (!$this->generatedPlan) {
+            return '';
+        }
+        $sqlData = app(\App\Services\AirflowDagGeneratorService::class)->generateSqlQuery($this->generatedPlan);
+        return $sqlData['select_query'];
+    }
+
     public function getAirflowDagCode(): string
     {
         if (!$this->generatedPlan) {

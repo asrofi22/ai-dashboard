@@ -265,6 +265,33 @@ class StudioPipelines extends Component
             }
 
             $nodes = &$canvas['nodes'];
+
+            // Sync connection and table fields from parent component properties to visual node settings
+            foreach ($nodes as &$node) {
+                if ($node['type'] === 'input' || ($node['name'] ?? '') === 'source' || ($node['name'] ?? '') === 'Table Input' || ($node['name'] ?? '') === 'Database Input') {
+                    if (!isset($node['settings'])) {
+                        $node['settings'] = [];
+                    }
+                    if (empty($node['settings']['connection_id']) && !empty($this->sourceConnectionId)) {
+                        $node['settings']['connection_id'] = $this->sourceConnectionId;
+                    }
+                    if (empty($node['settings']['sql']) && !empty($this->sourceTable)) {
+                        $node['settings']['sql'] = "SELECT * FROM {$this->sourceTable}";
+                    }
+                }
+                if ($node['type'] === 'output' || ($node['name'] ?? '') === 'target' || ($node['name'] ?? '') === 'Table Output' || ($node['name'] ?? '') === 'Insert Update') {
+                    if (!isset($node['settings'])) {
+                        $node['settings'] = [];
+                    }
+                    if (empty($node['settings']['connection_id']) && !empty($this->targetConnectionId)) {
+                        $node['settings']['connection_id'] = $this->targetConnectionId;
+                    }
+                    if (empty($node['settings']['target_table']) && !empty($this->targetTable)) {
+                        $node['settings']['target_table'] = $this->targetTable;
+                    }
+                }
+            }
+            unset($node);
             $connections = $canvas['connections'] ?? [];
 
             // Adjacency and Parents
@@ -654,7 +681,9 @@ class StudioPipelines extends Component
         
         $this->viewMode = 'workspace';
         $this->workspaceTab = 'canvas';
+        $this->propagateMetadata();
         $this->loadTemplatesAndVersions();
+        $this->dispatch('canvas-updated');
     }
 
     public function openEdit(int $id): void
@@ -720,7 +749,9 @@ class StudioPipelines extends Component
         $this->isEditing = true;
         $this->viewMode = 'workspace';
         $this->workspaceTab = 'canvas';
+        $this->propagateMetadata();
         $this->loadTemplatesAndVersions();
+        $this->dispatch('canvas-updated');
     }
 
     public function closeWorkspace(): void
@@ -858,6 +889,7 @@ class StudioPipelines extends Component
             $this->columnMappings = $ver->column_mapping ?? [];
             $this->canvasDataJson = json_encode($ver->canvas_data);
             $this->scheduleInterval = $ver->schedule_interval;
+            $this->dispatch('canvas-updated');
 
             session()->flash('message', "Versi #{$ver->version_number} berhasil dimuat ke editor. Jangan lupa klik Simpan untuk memperbarui.");
         } catch (\Exception $e) {
@@ -1760,26 +1792,16 @@ class StudioPipelines extends Component
             'target_table' => $targetTable,
             'transformations' => $transformations,
             'column_mapping' => $columnMapping,
-            'schedule_interval' => $this->scheduleInterval
+            'schedule_interval' => $this->scheduleInterval,
+            'canvas_data' => $canvas
         ];
     }
 
     public function getSqlQueryPreview(): string
     {
         $pipeline = $this->getPipelineDataFromCanvas();
-        $sqlMappingLines = [];
-        foreach ($pipeline['column_mapping'] as $map) {
-            $src = $map['source'] ?? '';
-            $tgt = $map['target'] ?? '';
-            if (str_contains($src, '[Kalkulasi')) {
-                $sqlMappingLines[] = "    (first_name || ' ' || last_name) AS {$tgt}";
-            } elseif (str_contains($src, '[Serial')) {
-                $sqlMappingLines[] = "    NEXTVAL('seq_{$tgt}') AS {$tgt}";
-            } else {
-                $sqlMappingLines[] = "    {$src} AS {$tgt}";
-            }
-        }
-        return "SELECT\n" . (empty($sqlMappingLines) ? "    *" : implode(",\n", $sqlMappingLines)) . "\nFROM " . $pipeline['source_table'];
+        $sqlData = app(\App\Services\AirflowDagGeneratorService::class)->generateSqlQuery($pipeline);
+        return $sqlData['select_query'];
     }
 
     public function getJsonDefinition(): array

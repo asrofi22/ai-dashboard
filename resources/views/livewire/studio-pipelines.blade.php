@@ -21,6 +21,16 @@
                         this.updateCanvasJson();
                     }, { deep: true });
                     
+                    this.$watch('$wire.canvasDataJson', value => {
+                        if (value) {
+                            if (value !== JSON.stringify(this.canvas)) {
+                                this.loadCanvas();
+                            }
+                        } else {
+                            this.canvas = { nodes: [], connections: [] };
+                        }
+                    });
+                    
                     // Listen to livewire updates
                     window.addEventListener('canvas-updated', () => {
                         this.loadCanvas();
@@ -122,7 +132,7 @@
                         this.activeTab = 'meta';
                     } else if (this.configNode.name === 'Sort Rows') {
                         if (!this.configNode.settings.fields) this.configNode.settings.fields = [];
-                    } else if (this.configNode.name === 'Table Input' || this.configNode.name === 'Database Input') {
+                    } else if (this.configNode.type === 'input' || this.configNode.name === 'source' || this.configNode.name === 'Table Input' || this.configNode.name === 'Database Input') {
                         if (!this.configNode.settings.sql) this.configNode.settings.sql = '';
                         if (!this.configNode.settings.connection_id) this.configNode.settings.connection_id = '';
                     } else if (this.configNode.name === 'Modified JavaScript Value') {
@@ -1270,6 +1280,13 @@
 
                 @if($workspaceTab === 'airflow')
                     <div class="flex-1 p-6 bg-slate-50 dark:bg-[#161A25]/30 overflow-y-auto space-y-4 relative" x-data="{ 
+                        copied: false,
+                        copyCode() {
+                            navigator.clipboard.writeText(this.$refs.dagCode.innerText);
+                            this.copied = true;
+                            setTimeout(() => this.copied = false, 2000);
+                        }
+                    }">
                         <!-- Tab Loading Overlay -->
                         <div wire:loading wire:target="$set('workspaceTab', 'airflow')" class="absolute inset-0 bg-white/70 dark:bg-[#12151E]/70 backdrop-blur-sm z-20 flex flex-col items-center justify-center space-y-3">
                             <svg class="w-8 h-8 text-indigo-500 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -1278,14 +1295,6 @@
                             </svg>
                             <span class="text-xs font-bold text-slate-700 dark:text-slate-350">Menghasilkan Airflow DAG...</span>
                         </div>
-                        code: `{{ $this->getAirflowDagCode() }}`,
-                        copied: false,
-                        copyCode() {
-                            navigator.clipboard.writeText(this.code);
-                            this.copied = true;
-                            setTimeout(() => this.copied = false, 2000);
-                        }
-                    }">
                         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
                         <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
                         <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
@@ -1343,7 +1352,7 @@
                                 </div>
                             </div>
                             <div class="relative rounded-lg overflow-hidden border border-slate-200 dark:border-slate-800 bg-[#0d1117]">
-                                <pre class="p-5 font-mono text-[11px] overflow-x-auto leading-relaxed text-slate-355"><code class="language-python" x-init="$nextTick(() => { if (typeof hljs !== 'undefined') { hljs.highlightElement($el); } })">{{ $this->getAirflowDagCode() }}</code></pre>
+                                <pre class="p-5 font-mono text-[11px] overflow-x-auto leading-relaxed text-slate-355"><code x-ref="dagCode" class="language-python" x-init="$nextTick(() => { if (typeof hljs !== 'undefined') { hljs.highlightElement($el); } })">{{ $this->getAirflowDagCode() }}</code></pre>
                             </div>
                         </div>
                     </div>
@@ -1384,7 +1393,7 @@
                         </div>
 
                         <!-- 1. TABLE INPUT / DATABASE INPUT EDITOR -->
-                        <template x-if="configNode.name === 'Table Input' || configNode.name === 'Database Input'">
+                        <template x-if="configNode.type === 'input' || configNode.name === 'source' || configNode.name === 'Table Input' || configNode.name === 'Database Input'">
                             <div class="space-y-4" x-data="{ 
                                 isPreviewing: false, 
                                 isSelectingTable: false,
@@ -1728,6 +1737,7 @@
                                                                 <option value="Integer">Integer</option>
                                                                 <option value="Number">Number</option>
                                                                 <option value="Date">Date</option>
+                                                                <option value="Timestamp">Timestamp</option>
                                                                 <option value="Boolean">Boolean</option>
                                                                 <option value="BigNumber">BigNumber</option>
                                                             </select>
@@ -2008,7 +2018,7 @@
                         </template>
 
                         <!-- 5. DEFAULT/GENERIC EDITOR FOR OTHER STEPS -->
-                        <template x-if="!['Table Input', 'Database Input', 'Select Values', 'Rename Fields', 'Formula', 'Data Grid'].includes(configNode.name)">
+                        <template x-if="configNode.type !== 'input' && configNode.type !== 'output' && !['Table Input', 'Database Input', 'Select Values', 'Rename Fields', 'Formula', 'Data Grid'].includes(configNode.name)">
                             <div class="space-y-4">
                                 <!-- Sort Rows configuration -->
                                 <template x-if="configNode.name === 'Sort Rows'">

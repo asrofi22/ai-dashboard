@@ -410,7 +410,7 @@
                                         <span>SQL Extraction Query (dialek database)</span>
                                         <span class="text-indigo-500">PostgreSQL</span>
                                     </div>
-                                    <pre class="bg-black p-4 rounded-lg font-mono text-[10px] text-indigo-300 overflow-x-auto leading-relaxed select-all">{{ $generatedPlan['sql_preview'] ?? '' }}</pre>
+                                    <pre class="bg-black p-4 rounded-lg font-mono text-[10px] text-indigo-300 overflow-x-auto leading-relaxed select-all">{{ $this->getSqlQueryPreview() }}</pre>
                                 </div>
                             @endif
 
@@ -429,10 +429,9 @@
                                 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
 
                                 <div class="space-y-3" x-data="{ 
-                                    code: `{{ $this->getAirflowDagCode() }}`,
                                     copied: false,
                                     copyCode() {
-                                        navigator.clipboard.writeText(this.code);
+                                        navigator.clipboard.writeText(this.$refs.dagCode.innerText);
                                         this.copied = true;
                                         setTimeout(() => this.copied = false, 2000);
                                     }
@@ -476,7 +475,7 @@
                                         </div>
                                     </div>
                                     <div class="relative rounded-lg overflow-hidden border border-slate-200 dark:border-slate-800 bg-[#0d1117]">
-                                        <pre class="p-4 font-mono text-[11px] overflow-x-auto leading-relaxed text-slate-300"><code class="language-python" x-init="$nextTick(() => { if (typeof hljs !== 'undefined') { hljs.highlightElement($el); } })">{{ $this->getAirflowDagCode() }}</code></pre>
+                                        <pre class="p-4 font-mono text-[11px] overflow-x-auto leading-relaxed text-slate-300"><code x-ref="dagCode" class="language-python" x-init="$nextTick(() => { if (typeof hljs !== 'undefined') { hljs.highlightElement($el); } })">{{ $this->getAirflowDagCode() }}</code></pre>
                                     </div>
                                 </div>
                             @endif
