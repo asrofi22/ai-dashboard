@@ -212,6 +212,60 @@ class StudioEtlTest extends TestCase
         ]);
     }
 
+    public function test_source_selection_filters_out_dw_and_target_tables()
+    {
+        $conn = EtlConnection::create([
+            'name' => 'PostgreSQL DWH & Staging',
+            'type' => 'Database',
+            'driver' => 'pgsql',
+            'config' => [],
+            'status' => 'active',
+            'metadata' => [
+                'tables' => [
+                    ['name' => 'dw.dim_customer', 'columns' => 'customer_id,customer_name', 'row_count' => 10],
+                    ['name' => 'dw.fact_sales', 'columns' => 'sales_id,customer_id,amount', 'row_count' => 100],
+                    ['name' => 'warehouse.payment', 'columns' => 'payment_id,customer_id,amount', 'row_count' => 200],
+                    ['name' => 'datamart.leads', 'columns' => 'lead_id,email', 'row_count' => 50],
+                    ['name' => 'staging.customer', 'columns' => 'customer_id,first_name,last_name,email', 'row_count' => 5],
+                    ['name' => 'public.customer', 'columns' => 'customer_id,name,email', 'row_count' => 5],
+                ]
+            ]
+        ]);
+
+        $connectionContext = [
+            [
+                'id' => $conn->id,
+                'name' => $conn->name,
+                'driver' => $conn->driver,
+                'tables' => [
+                    ['name' => 'dw.dim_customer', 'columns' => 'customer_id,customer_name', 'rows' => 10],
+                    ['name' => 'dw.fact_sales', 'columns' => 'sales_id,customer_id,amount', 'rows' => 100],
+                    ['name' => 'warehouse.payment', 'columns' => 'payment_id,customer_id,amount', 'rows' => 200],
+                    ['name' => 'datamart.leads', 'columns' => 'lead_id,email', 'rows' => 50],
+                    ['name' => 'staging.customer', 'columns' => 'customer_id,first_name,last_name,email', 'rows' => 5],
+                    ['name' => 'public.customer', 'columns' => 'customer_id,name,email', 'rows' => 5],
+                ]
+            ]
+        ];
+
+        $gemini = app(\App\Services\GeminiService::class);
+        $plan = $gemini->generateEtlStudioPipeline('Ambil data dari Oracle Finance ERP dan simpan ke dw.dim_customer', $connectionContext);
+
+        $this->assertNotNull($plan);
+        $candidateTables = array_column($plan['candidate_sources'] ?? [], 'table');
+
+        // dw.dim_customer, dw.fact_sales, warehouse.payment, datamart.leads must NEVER be candidate sources
+        $this->assertNotContains('dw.dim_customer', $candidateTables);
+        $this->assertNotContains('dw.fact_sales', $candidateTables);
+        $this->assertNotContains('warehouse.payment', $candidateTables);
+        $this->assertNotContains('datamart.leads', $candidateTables);
+
+        // Only staging.customer and public.customer should be candidates
+        $this->assertContains('staging.customer', $candidateTables);
+        $this->assertContains('public.customer', $candidateTables);
+    }
+
+
     public function test_studio_monitoring_metrics()
     {
         $conn1 = EtlConnection::create([
@@ -516,5 +570,32 @@ class StudioEtlTest extends TestCase
         $res4 = $component->previewSqlQuery($conn->id, 'SELECT order_id as id, amount as total FROM sales_orders');
         $this->assertEquals(['id', 'total'], $res4['columns']);
         $this->assertEquals('Val total 1', $res4['rows'][0]['total']);
+    }
+
+    public function test_select_candidate_source_updates_pipeline_source()
+    {
+        $conn = EtlConnection::create([
+            'name' => 'Oracle Finance ERP',
+            'type' => 'Database',
+            'driver' => 'oracle',
+            'config' => [],
+            'status' => 'active',
+            'metadata' => [
+                'tables' => [
+                    ['name' => 'staging.customer', 'columns' => 'customer_id,first_name,last_name,email'],
+                    ['name' => 'public.customer', 'columns' => 'customer_id,name,email']
+                ]
+            ]
+        ]);
+
+        Livewire::test(\App\Livewire\StudioAssistant::class)
+            ->set('sourceConnectionId', $conn->id)
+            ->set('prompt', 'Ambil data dari Oracle Finance ERP dan simpan ke dw.dim_customer')
+            ->call('generatePipeline')
+            ->assertHasNoErrors()
+            ->assertNotSet('generatedPlan', null)
+            ->call('selectCandidateSource', 'public.customer')
+            ->assertHasNoErrors()
+            ->assertSet('generatedPlan.source_table', 'public.customer');
     }
 }

@@ -54,5 +54,8 @@ Route::prefix('studio')->name('studio.')->group(function () {
     Route::get('/monitoring', function () {
         return view('welcome', ['activeTab' => 'studio-monitoring']);
     })->name('monitoring');
+
+    Route::get('/pipelines/{pipeline}/download-dag', [\App\Http\Controllers\AirflowDagController::class, 'downloadSaved'])->name('pipelines.download-dag');
+    Route::post('/pipelines/download-dag-draft', [\App\Http\Controllers\AirflowDagController::class, 'downloadDraft'])->name('pipelines.download-dag-draft');
 });
 

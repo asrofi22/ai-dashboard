@@ -454,17 +454,18 @@ ORDER BY s.amount DESC LIMIT 15";
      */
     public function generateEtlStudioPipeline(string $promptText, array $connections = []): ?array
     {
-        $prompt = "Anda adalah Solution Architect dan Data Engineer handal yang bekerja dengan sistem ETL berbasis Pentaho Data Integration (PDI).\n";
-        $prompt .= "Pengguna ingin merancang sebuah ETL pipeline dari instruksi berikut:\n\n";
+        $targetTable = $this->resolveTargetTable($promptText, $connections);
+        $filteredConnections = $this->filterSourceConnections($connections, $targetTable);
+
+        $prompt = "Anda adalah Senior Data Warehouse Architect, Senior ETL Engineer, dan Pentaho PDI Solution Architect.\n";
+        $prompt .= "Tugas Anda adalah merancang ETL pipeline untuk target table tertentu berdasarkan deskripsi pengguna berikut:\n\n";
         $prompt .= "\"$promptText\"\n\n";
 
         // --- Embed real schema context if available ---
-        if (!empty($connections)) {
+        if (!empty($filteredConnections)) {
             $prompt .= "=== KONTEKS SCHEMA DATABASE YANG TERSEDIA ===\n";
-            $prompt .= "Berikut adalah daftar KONEKSI ETL yang sudah terdaftar beserta tabel dan kolomnya.\n";
-            $prompt .= "Gunakan informasi ini untuk menentukan source_connection_name, source_table, target_connection_name, dan target_table yang PALING TEPAT.\n\n";
-
-            foreach ($connections as $idx => $conn) {
+            $prompt .= "Berikut adalah daftar koneksi database yang tersedia beserta tabel, skema, kolom, dan jumlah barisnya.\n";
+            foreach ($filteredConnections as $idx => $conn) {
                 $prompt .= ($idx + 1) . ". KONEKSI: \"{$conn['name']}\" (driver: {$conn['driver']})\n";
                 if (!empty($conn['tables'])) {
                     foreach ($conn['tables'] as $tbl) {
@@ -480,24 +481,94 @@ ORDER BY s.amount DESC LIMIT 15";
                 $prompt .= "\n";
             }
             $prompt .= "=== AKHIR KONTEKS SCHEMA ===\n\n";
-            $prompt .= "PENTING: Gunakan nama tabel dan nama koneksi PERSIS seperti yang tercantum di konteks di atas.\n";
-            $prompt .= "PENTING: Untuk column_mapping, gunakan nama kolom PERSIS dari tabel source dan target yang ada di konteks di atas.\n";
-            $prompt .= "PENTING: Jika kolom target merupakan hasil kalkulasi (seperti ending_balance yang merupakan penambahan dari beginning_balance + payment_amount), auto-increment/sequence (seperti balance_id), atau lookup saldo sebelumnya (seperti beginning_balance), maka set nilai `source` dengan penanda khusus seperti `[Kalkulasi: formula]`, `[Serial (Unique)]`, atau `[Lookup: ending_balance (bulan sebelumnya)]` alih-alih nama kolom sumber fisik.\n\n";
         }
 
-        $prompt .= "Tugas Anda adalah merancang pipeline ini secara lengkap.\n";
-        $prompt .= "Hasilkan output HANYA dalam format JSON murni tanpa markdown tambahan, dengan kunci/keys berikut:\n";
+        $prompt .= "=== PROSES BERPIKIR & REASONING ARCHITECT ===\n";
+        $prompt .= "Lakukan tahapan analisis berikut secara ketat:\n\n";
+        $prompt .= "STEP 1: IDENTIFY TARGET TABLE TYPE\n";
+        $prompt .= "- Jika nama tabel target mengandung \"dim_\", maka target_type = DIMENSION\n";
+        $prompt .= "- Jika nama tabel target mengandung \"fact_\", maka target_type = FACT\n";
+        $prompt .= "- Jika nama tabel target mengandung \"bridge_\", maka target_type = BRIDGE\n";
+        $prompt .= "- Jika nama tabel target mengandung \"agg_\", \"summary_\", atau \"mart_\", maka target_type = AGGREGATE\n\n";
+        
+        $prompt .= "STEP 2: IDENTIFY TARGET BUSINESS ENTITY\n";
+        $prompt .= "- Tentukan business_entity target dengan menghapus skema dan awalan tipe (misal: \"dw.dim_customer\" -> entity = \"customer\", \"dw.fact_sales\" -> entity = \"sales\")\n\n";
+        
+        $prompt .= "STEP 3: CLASSIFY AVAILABLE TABLES\n";
+        $prompt .= "- Kelompokkan tabel-tabel di konteks skema menjadi:\n";
+        $prompt .= "  - MASTER TABLE (mengandung: customer, product, employee, vendor, branch, dll.)\n";
+        $prompt .= "  - TRANSACTION TABLE (mengandung: payment, sales, invoice, transaction, order, dll.)\n";
+        $prompt .= "  - LOOKUP TABLE (mengandung: country, province, status, category, dll.)\n";
+        $prompt .= "  - STAGING TABLE (berada di skema \"staging\" atau diawali \"staging.\")\n\n";
+        
+        $prompt .= "STEP 4: SELECT SOURCE TABLES (SCORING SYSTEM)\n";
+        $prompt .= "Hitung skor untuk masing-masing tabel kandidat sebagai source:\n";
+        $prompt .= "- ENTITY MATCH: Jika nama tabel mengandung entity yang sama (misal: customer): +40 poin\n";
+        $prompt .= "- SCHEMA PRIORITY: staging -> +30 poin, public -> +20 poin, dw -> -100 poin (Jangan gunakan skema dw sebagai source)\n";
+        $prompt .= "- COLUMN MATCH: Jika memiliki {entity}_id -> +10 poin, {entity}_name -> +10 poin, email -> +10 poin\n";
+        $prompt .= "- TRANSACTION PENALTY: Jika target_type adalah DIMENSION dan source table mengandung keyword transaksi (payment, sales, invoice, transaction, order): Kena penalti -50 poin\n";
+        $prompt .= "- Pilih tabel dengan skor tertinggi sebagai source utama. Jangan memilih tabel dari skema dw sebagai source.\n\n";
+        
+        $prompt .= "STEP 5: PENTAHO PIPELINE STEP PARITY MODE\n";
+        $prompt .= "Gunakan HANYA komponen/step Pentaho berikut:\n";
+        $prompt .= "- INPUT: Table Input, CSV File Input, Excel Input, Data Grid\n";
+        $prompt .= "- TRANSFORM: Select Values, Formula, Calculator, Filter Rows, Sort Rows, Unique Rows, Group By, Lookup, Join\n";
+        $prompt .= "- OUTPUT: Table Output, CSV Output, Excel Output\n\n";
+        $prompt .= "PENTING: Jangan menghasilkan script Python atau source code lainnya.\n\n";
+        
+        $prompt .= "Desain pipeline berdasarkan tipe target:\n";
+        $prompt .= "- Jika DIMENSION: Alur pipeline WAJIB: Table Input -> Select Values -> Formula -> Unique Rows -> Table Output\n";
+        $prompt .= "  (Transformations array untuk UI: ['Select Values', 'Formula', 'Unique Rows'])\n";
+        $prompt .= "- Jika FACT: Alur pipeline WAJIB: Table Input -> Lookup -> Calculator -> Group By -> Table Output\n";
+        $prompt .= "  (Transformations array untuk UI: ['Lookup', 'Calculator', 'Group By'])\n";
+        $prompt .= "- Jika target adalah tipe lain: desain alur menggunakan kombinasi step Pentaho yang diizinkan.\n\n";
+
+        $prompt .= "STEP 6: COLUMN MAPPING INTELLIGENCE\n";
+        $prompt .= "- Jika target kolom adalah customer_name (atau full_name/name) dan source memiliki first_name dan last_name:\n";
+        $prompt .= "  Petakan target customer_name ke source formula: \"first_name + ' ' + last_name\" atau \"CONCAT(first_name,' ',last_name)\", dan pastikan step \"Formula\" otomatis ada di dalam pipeline.\n\n";
+
+        $prompt .= "=== OUTPUT FORMAT ===\n";
+        $prompt .= "Hasilkan output HANYA dalam format JSON murni tanpa markdown tambahan, dengan struktur keys berikut:\n";
         $prompt .= "{\n";
-        $prompt .= "  \"pipeline_name\": \"Nama pipeline deskriptif dalam format snake_case (contoh: load_fact_customer_balance)\",\n";
-        $prompt .= "  \"source_connection_name\": \"Nama koneksi sumber PERSIS seperti di daftar koneksi di atas\",\n";
-        $prompt .= "  \"source_table\": \"Nama tabel sumber PERSIS seperti di daftar koneksi di atas (gunakan nama lengkap termasuk schema jika ada, contoh: public.customers)\",\n";
-        $prompt .= "  \"target_connection_name\": \"Nama koneksi target PERSIS seperti di daftar koneksi di atas\",\n";
-        $prompt .= "  \"target_table\": \"Nama tabel target PERSIS seperti di daftar koneksi di atas (gunakan nama lengkap termasuk schema jika ada, contoh: dw.fact_customer_balance)\",\n";
-        $prompt .= "  \"transformations\": [\"Daftar string transformasi yang relevan, pilih dari: 'Select Values', 'Rename Fields', 'Add Constants', 'Calculator', 'Formula', 'Filter Rows', 'Sort Rows', 'Group By', 'Aggregation', 'Unique Rows', 'Remove Duplicates', 'Replace Values', 'String Operations', 'Data Validation', 'Data Cleansing', 'Join', 'Lookup', 'Merge Rows', 'Pivot', 'Unpivot'\"],\n";
-        $prompt .= "  \"column_mapping\": [\n";
-        $prompt .= "     {\"source\": \"nama_kolom_source_persis\", \"target\": \"nama_kolom_target_persis\"}\n";
+        $prompt .= "  \"pipeline_name\": \"Nama pipeline deskriptif snake_case\",\n";
+        $prompt .= "  \"target_type\": \"DIMENSION | FACT | BRIDGE | AGGREGATE\",\n";
+        $prompt .= "  \"business_entity\": \"Nama entitas bisnis target\",\n";
+        $prompt .= "  \"selected_sources\": [\"Nama tabel source terpilih utama (misal: staging.customer)\"],\n";
+        $prompt .= "  \"candidate_sources\": [\n";
+        $prompt .= "     {\"table\": \"nama_tabel\", \"score\": 90, \"reasons\": [\"Alasan skor\"], \"type\": \"STAGING | MASTER | TRANSACTION | LOOKUP\"}\n";
         $prompt .= "  ],\n";
-        $prompt .= "  \"execution_plan\": \"Penjelasan langkah-langkah rencana eksekusi ETL dalam Bahasa Indonesia (2-3 kalimat yang menjelaskan logika bisnis dan teknis pipeline ini)\"\n";
+        $prompt .= "  \"reasoning\": [\n";
+        $prompt .= "     \"Target: dw.dim_customer\",\n";
+        $prompt .= "     \"Target Type: DIMENSION\",\n";
+        $prompt .= "     \"Business Entity: Customer\",\n";
+        $prompt .= "     \"Selected Source: staging.customer\",\n";
+        $prompt .= "     \"Reason:\",\n";
+        $prompt .= "     \"1. Nama entitas customer cocok 100%\",\n";
+        $prompt .= "     \"2. Berada pada schema staging\",\n";
+        $prompt .= "     \"3. ...\"\n";
+        $prompt .= "  ],\n";
+        $prompt .= "  \"steps\": [\"Daftar step Pentaho lengkap, misal: Table Input, Select Values, Formula, Unique Rows, Table Output\"],\n";
+        $prompt .= "  \"column_mapping\": [\n";
+        $prompt .= "     {\"source\": \"kolom_sumber\", \"target\": \"kolom_target\"}\n";
+        $prompt .= "  ],\n";
+        $prompt .= "  \"validation_result\": {\n";
+        $prompt .= "     \"source_table_exists\": true,\n";
+        $prompt .= "     \"target_table_exists\": true,\n";
+        $prompt .= "     \"column_mapping_valid\": true,\n";
+        $prompt .= "     \"warnings\": []\n";
+        $prompt .= "  },\n";
+        $prompt .= "  \"source_connection_name\": \"Nama koneksi source terpilih utama\",\n";
+        $prompt .= "  \"source_table\": \"Nama tabel source terpilih utama\",\n";
+        $prompt .= "  \"target_connection_name\": \"Nama koneksi target terpilih utama\",\n";
+        $prompt .= "  \"target_table\": \"Nama tabel target\",\n";
+        $prompt .= "  \"transformations\": [\"Daftar transformasi untuk UI, misal: 'Select Values', 'Formula', 'Unique Rows'\"],\n";
+        $prompt .= "  \"execution_plan\": \"Penjelasan singkat rencana eksekusi\",\n";
+        $prompt .= "  \"sql_preview\": \"Preview SQL Query untuk Table Input\",\n";
+        $prompt .= "  \"json_definition\": {\"pipeline_name\": \"...\", \"steps\": []},\n";
+        $prompt .= "  \"pipeline_steps\": [\n";
+        $prompt .= "     {\"name\": \"Nama Step\", \"description\": \"Deskripsi\", \"inputs\": [], \"outputs\": []}\n";
+        $prompt .= "  ],\n";
+        $prompt .= "  \"confidence\": {\"score\": 95, \"category\": \"High Confidence\", \"warning\": false, \"factors\": []}\n";
         $prompt .= "}";
 
         $text = $this->postPrompt($prompt, true);
@@ -508,8 +579,7 @@ ORDER BY s.amount DESC LIMIT 15";
             }
         }
 
-        // Fallback local engine matching keywords
-        return $this->getFallbackStudioPipeline($promptText, $connections);
+        return $this->getFallbackStudioPipeline($promptText, $connections, $targetTable);
     }
 
     /**
@@ -522,32 +592,23 @@ ORDER BY s.amount DESC LIMIT 15";
      *  3. Full table-name substring (NOT per-fragment) to avoid "customer" in
      *     "fact_customer_balance" wrongly matching "dim_customer"
      */
-    protected function getFallbackStudioPipeline(string $promptText, array $connections = []): array
+    protected function getFallbackStudioPipeline(string $promptText, array $connections = [], string $targetTable = 'dim_customer'): array
     {
         $lower = strtolower($promptText);
 
-        // ─── Defaults ──────────────────────────────────────────────────────────
-        $name        = 'etl_studio_pipeline_' . rand(100, 999);
-        $sourceConn  = 'Oracle Finance ERP';
-        $sourceTable = 'customers_raw';
-        $targetConn  = 'PostgreSQL Data Warehouse';
-        $targetTable = 'dim_customer';
-        $sourceColumns = ['customer_id', 'cust_name', 'email_address'];
+        // ─── Resolve Target Table and Connections from Context ───────────
+        $targetTable = $targetTable ?: 'dim_customer';
+        $targetConn = 'PostgreSQL Data Warehouse';
         $targetColumns = ['customer_id', 'customer_name', 'email'];
-        $transformations = ['Select Values', 'Data Cleansing'];
-        $plan = "Mengekstrak data dari sumber, melakukan pembersihan dan standarisasi, lalu memuatnya ke tabel target gudang data.";
+        
+        $foundTgtConn = null;
+        $foundTgtTable = null;
+        $foundTgtCols = [];
 
-        // ─── Try to resolve from real connection context ───────────────────────
         if (!empty($connections)) {
-
-            // ── STRATEGY 1: Extract explicit schema.table refs from prompt ─────
-            // e.g. "dw.fact_customer_balance" → exact match wins over fragments
+            // ── Strategy 1: Extract explicit schema.table refs from prompt
             preg_match_all('/\b([a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*)\b/i', $promptText, $schemaTableM);
             $schemaTableRefs = array_unique(array_map('strtolower', $schemaTableM[0] ?? []));
-
-            $foundTgtConn  = null;
-            $foundTgtTable = null;
-            $foundTgtCols  = [];
 
             foreach ($schemaTableRefs as $ref) {
                 foreach ($connections as $conn) {
@@ -564,7 +625,7 @@ ORDER BY s.amount DESC LIMIT 15";
                 }
             }
 
-            // ── STRATEGY 2: Find connection by name in prompt ─────────────────
+            // ── Strategy 2: Find target connection by checking if name appears in prompt
             $mentionedConnIdx = null;
             foreach ($connections as $ci => $conn) {
                 if (str_contains($lower, strtolower($conn['name']))) {
@@ -577,22 +638,20 @@ ORDER BY s.amount DESC LIMIT 15";
                 }
             }
 
-            // ── STRATEGY 3: Full table-name substring match ───────────────────
-            // Uses FULL name (e.g. "fact_customer_balance") not per-fragment,
-            // preventing "customer" from matching "dim_customer" when user typed
-            // "fact_customer_balance" in the prompt.
+            // ── Strategy 3: Substring search in prompt
             if (!$foundTgtTable) {
                 $orderedConns = $connections;
                 if ($mentionedConnIdx !== null) {
-                    // Put the mentioned connection first
                     $mc = array_splice($orderedConns, $mentionedConnIdx, 1);
                     array_unshift($orderedConns, $mc[0]);
                 }
 
-                // 3a: full table name (with schema) substring in prompt
+                // 3a: full table name substring
                 foreach ($orderedConns as $conn) {
                     foreach ($conn['tables'] ?? [] as $tbl) {
-                        if (str_contains($lower, strtolower($tbl['name']))) {
+                        $tblNameLower = strtolower($tbl['name']);
+                        $pattern = '/\b' . preg_quote($tblNameLower, '/') . '\b/';
+                        if (preg_match($pattern, $lower)) {
                             $foundTgtConn  = $conn['name'];
                             $foundTgtTable = $tbl['name'];
                             $foundTgtCols  = !empty($tbl['columns'])
@@ -603,14 +662,16 @@ ORDER BY s.amount DESC LIMIT 15";
                     }
                 }
 
-                // 3b: bare table name (strip schema prefix) in prompt
+                // 3b: bare table name substring
                 if (!$foundTgtTable) {
                     foreach ($orderedConns as $conn) {
                         foreach ($conn['tables'] ?? [] as $tbl) {
                             $bare = strstr($tbl['name'], '.') !== false
                                 ? substr(strstr($tbl['name'], '.'), 1)
                                 : $tbl['name'];
-                            if (str_contains($lower, strtolower($bare))) {
+                            $bareLower = strtolower($bare);
+                            $pattern = '/\b' . preg_quote($bareLower, '/') . '\b/';
+                            if (preg_match($pattern, $lower)) {
                                 $foundTgtConn  = $conn['name'];
                                 $foundTgtTable = $tbl['name'];
                                 $foundTgtCols  = !empty($tbl['columns'])
@@ -623,582 +684,395 @@ ORDER BY s.amount DESC LIMIT 15";
                 }
             }
 
-            // ── Find source table ─────────────────────────────────────────────
-            // If user mentioned a schema (e.g. "schema public"), prefer tables from it
-            $preferredSchema = null;
-            if (preg_match('/\bschema\s+([a-z_][a-z0-9_]*)\b/i', $promptText, $sm)) {
-                $preferredSchema = strtolower($sm[1]);
-            }
-
-            $foundSrcConn  = null;
-            $foundSrcTable = null;
-            $foundSrcCols  = [];
-
             if ($foundTgtTable) {
-                $highestScore = -1;
-                $targetSchema = null;
-                if (str_contains($foundTgtTable, '.')) {
-                    $targetSchema = explode('.', $foundTgtTable)[0];
-                }
+                $targetConn = $foundTgtConn ?? $targetConn;
+                $targetTable = $foundTgtTable;
+                $targetColumns = $foundTgtCols;
+            }
+        } else {
+            // Hardcoded guess based on prompt keywords if no database is connected
+            if (str_contains($lower, 'sales') || str_contains($lower, 'payment') || str_contains($lower, 'fact')) {
+                $targetTable = 'dw.fact_sales';
+                $targetColumns = ['sales_id', 'customer_id', 'amount', 'transaction_date'];
+            }
+        }
 
-                foreach ($connections as $conn) {
-                    foreach ($conn['tables'] ?? [] as $tbl) {
-                        if ($tbl['name'] === $foundTgtTable) continue;
+        // ─── STEP 1: Identify Target Table Type ──────────────────────────
+        $targetType = 'DIMENSION';
+        $targetTableLower = strtolower($targetTable);
+        if (str_contains($targetTableLower, 'dim_')) {
+            $targetType = 'DIMENSION';
+        } elseif (str_contains($targetTableLower, 'fact_')) {
+            $targetType = 'FACT';
+        } elseif (str_contains($targetTableLower, 'bridge_')) {
+            $targetType = 'BRIDGE';
+        } elseif (str_contains($targetTableLower, 'agg_') || str_contains($targetTableLower, 'summary_') || str_contains($targetTableLower, 'mart_')) {
+            $targetType = 'AGGREGATE';
+        }
 
-                        // Skip tables belonging to target schema (e.g. 'dw')
-                        if ($targetSchema && str_starts_with(strtolower($tbl['name']), strtolower($targetSchema) . '.')) {
-                            continue;
-                        }
-                        
-                        $isPreferredSchema = !$preferredSchema || str_starts_with(strtolower($tbl['name']), $preferredSchema . '.');
-                        $cols = !empty($tbl['columns']) ? array_map('trim', explode(',', $tbl['columns'])) : [];
-                        $score = 0;
-                        
-                        // 1. Exact matches (e.g. customer_id)
-                        $exactMatches = array_intersect(array_map('strtolower', $cols), array_map('strtolower', $foundTgtCols));
-                        $score += count($exactMatches) * 5;
-                        
-                        // 2. Fuzzy matches (substrings)
-                        foreach ($cols as $sc) {
-                            $scL = strtolower($sc);
-                            foreach ($foundTgtCols as $tc) {
-                                $tcL = strtolower($tc);
-                                if ($scL === $tcL) continue; // already scored as exact
-                                
-                                if (str_contains($tcL, $scL) || str_contains($scL, $tcL)) {
-                                    $score += 2;
-                                }
-                                
-                                // Date/time context matches
-                                $isTimeTarget = str_contains($tcL, 'date') || str_contains($tcL, 'time') || str_contains($tcL, 'month') || str_contains($tcL, 'period') || str_contains($tcL, 'year');
-                                $isTimeSource = str_contains($scL, 'date') || str_contains($scL, 'time') || str_contains($scL, 'month') || str_contains($scL, 'period') || str_contains($scL, 'year');
-                                if ($isTimeTarget && $isTimeSource) {
-                                    $score += 1;
-                                }
-                            }
-                        }
-                        
-                        // 3. Table name keywords in prompt
-                        $tableNameLower = strtolower($tbl['name']);
-                        $bareTable = strstr($tableNameLower, '.') !== false ? substr(strstr($tableNameLower, '.'), 1) : $tableNameLower;
-                        if (str_contains($lower, $bareTable)) {
-                            $score += 10;
-                        }
-                        
-                        // 4. Boost tables in preferred schema
-                        if ($isPreferredSchema) {
-                            $score += 8;
-                        }
+        // ─── STEP 2: Identify Target Business Entity ──────────────────────
+        $entity = $targetTable;
+        if (str_contains($entity, '.')) {
+            $entity = explode('.', $entity)[1];
+        }
+        $entity = preg_replace('/^(dim_|fact_|bridge_|agg_|summary_|mart_)/i', '', $entity);
+        $entity = strtolower($entity); // e.g. "customer", "sales", "product"
 
-                        // 5. Boost same connection
-                        if ($conn['name'] === $foundTgtConn) {
-                            $score += 20;
-                        } else {
-                            $score -= 20;
-                        }
-                        
-                        if ($score > $highestScore && $score > 0) {
-                            $highestScore = $score;
-                            $foundSrcConn = $conn['name'];
-                            $foundSrcTable = $tbl['name'];
-                            $foundSrcCols = $cols;
-                        }
+        // ─── STEP 3, 4, 5: Scan available tables & Classify & Score ─────
+        $sourceConn = 'Oracle Finance ERP';
+        $sourceTable = 'customers_raw';
+        $sourceColumns = ['customer_id', 'cust_name', 'email_address'];
+        $selectedSourceObj = null;
+        $scoredSources = [];
+
+        $classifyTable = function($tableName) {
+            $tblLower = strtolower($tableName);
+            $bare = str_contains($tblLower, '.') ? explode('.', $tblLower)[1] : $tblLower;
+            
+            if (str_starts_with($tblLower, 'staging.') || str_contains($tblLower, 'staging')) {
+                return 'STAGING';
+            }
+            if (preg_match('/\b(payment|sales|invoice|transaction|order|purchase)\b/i', $bare)) {
+                return 'TRANSACTION';
+            }
+            if (preg_match('/\b(country|province|status|category|city|state|gender|lookup)\b/i', $bare)) {
+                return 'LOOKUP';
+            }
+            if (preg_match('/\b(customer|product|employee|vendor|branch|store|user|agent)\b/i', $bare)) {
+                return 'MASTER';
+            }
+            return 'MASTER';
+        };
+
+        $filteredConnections = $this->filterSourceConnections($connections, $targetTable);
+
+        if (!empty($filteredConnections)) {
+            foreach ($filteredConnections as $conn) {
+                foreach ($conn['tables'] ?? [] as $tbl) {
+                    $tblName = $tbl['name'];
+                    $tblNameLower = strtolower($tblName);
+                    
+                    if ($tblNameLower === strtolower($targetTable)) {
+                        continue;
                     }
+                    
+                    $tblSchema = str_contains($tblNameLower, '.') ? explode('.', $tblNameLower)[0] : 'public';
+                    $bareName = str_contains($tblNameLower, '.') ? explode('.', $tblNameLower)[1] : $tblNameLower;
+                    
+                    $tblType = $classifyTable($tblName);
+                    $score = 0;
+                    $reasons = [];
+                    
+                    // ENTITY MATCH (+40 points)
+                    if (str_contains($tblNameLower, $entity)) {
+                        $score += 40;
+                        $reasons[] = "Nama entitas '{$entity}' cocok (+40 poin)";
+                    }
+                    
+                    // SCHEMA PRIORITY
+                    if ($tblSchema === 'staging') {
+                        $score += 30;
+                        $reasons[] = "Berada pada schema staging (+30 poin)";
+                    } elseif ($tblSchema === 'public') {
+                        $score += 20;
+                        $reasons[] = "Berada pada schema public (+20 poin)";
+                    } elseif ($tblSchema === 'dw') {
+                        $score -= 100;
+                        $reasons[] = "Berada pada schema dw (penalti -100 poin, tidak boleh digunakan)";
+                    }
+                    
+                    // COLUMN MATCH
+                    $cols = !empty($tbl['columns']) ? array_map('trim', explode(',', $tbl['columns'])) : [];
+                    $colsLower = array_map('strtolower', $cols);
+                    
+                    if (in_array("{$entity}_id", $colsLower)) {
+                        $score += 10;
+                        $reasons[] = "Memiliki kolom {$entity}_id (+10 poin)";
+                    }
+                    if (in_array("{$entity}_name", $colsLower)) {
+                        $score += 10;
+                        $reasons[] = "Memiliki kolom {$entity}_name (+10 poin)";
+                    }
+                    if (in_array('email', $colsLower)) {
+                        $score += 10;
+                        $reasons[] = "Memiliki kolom email (+10 poin)";
+                    }
+                    
+                    // TRANSACTION PENALTY
+                    if ($targetType === 'DIMENSION' && preg_match('/\b(payment|sales|invoice|transaction|order)\b/i', $bareName)) {
+                        $score -= 50;
+                        $reasons[] = "Tabel transaksi '{$bareName}' digunakan untuk dimensi (penalti -50 poin)";
+                    }
+                    
+                    if ($tblSchema !== 'dw') {
+                        $reasons[] = "Tidak berasal dari schema dw";
+                    }
+                    
+                    $scoredSources[] = [
+                        'table' => $tblName,
+                        'connection' => $conn['name'],
+                        'columns' => $cols,
+                        'score' => $score,
+                        'reasons' => $reasons,
+                        'type' => $tblType
+                    ];
                 }
             }
 
-            // ── Apply found values ────────────────────────────────────────────
-            if ($foundTgtTable) { $targetConn=$foundTgtConn??$targetConn; $targetTable=$foundTgtTable; $targetColumns=$foundTgtCols; }
-            if ($foundSrcTable) { $sourceConn=$foundSrcConn??$sourceConn; $sourceTable=$foundSrcTable; $sourceColumns=$foundSrcCols; }
-
-            // ── Pipeline name ─────────────────────────────────────────────────
-            $namePart = preg_replace('/[^a-z0-9_]/', '_', strtolower(str_replace('.', '_', $targetTable)));
-            $name = 'load_' . ltrim($namePart, '_');
-
-            // ── Column mapping ────────────────────────────────────────────────
-            $mapping = [];
-            foreach ($targetColumns as $tc) {
-                $tcL = strtolower(trim($tc));
+            if (!empty($scoredSources)) {
+                usort($scoredSources, function($a, $b) {
+                    return $b['score'] <=> $a['score'];
+                });
                 
-                // Specific calculated/generated column rules
-                if ($tcL === 'ending_balance') {
-                    $mapping[] = ['source' => '[Kalkulasi: beginning_balance + payment_amount]', 'target' => trim($tc)];
-                    continue;
-                }
-                
-                // Generalized primary surrogate key/serial column detection (e.g. customer_key, balance_id)
-                $isPrimaryKeyName = str_ends_with($tcL, '_key') || str_ends_with($tcL, '_id') || $tcL === 'id';
-                $isInSource = in_array($tcL, array_map('strtolower', $sourceColumns));
-                if ($isPrimaryKeyName && !$isInSource) {
-                    $mapping[] = ['source' => '[Serial (Unique)]', 'target' => trim($tc)];
-                    continue;
-                }
+                // Select highest-scoring source
+                $selectedSourceObj = $scoredSources[0];
+                $sourceConn = $selectedSourceObj['connection'];
+                $sourceTable = $selectedSourceObj['table'];
+                $sourceColumns = $selectedSourceObj['columns'];
+            }
+        } else {
+            // Mock candidates when no connections exist
+            if ($targetType === 'DIMENSION') {
+                $sourceTable = 'staging.customer';
+                $sourceColumns = ['customer_id', 'first_name', 'last_name', 'email'];
+                $scoredSources[] = [
+                    'table' => 'staging.customer',
+                    'connection' => 'PostgreSQL Staging',
+                    'columns' => $sourceColumns,
+                    'score' => 90,
+                    'reasons' => ["Nama entitas cocok 100%", "Berada pada schema staging", "Memiliki customer_id", "Tidak berasal dari schema dw"],
+                    'type' => 'STAGING'
+                ];
+                $scoredSources[] = [
+                    'table' => 'public.customer',
+                    'connection' => 'PostgreSQL Public',
+                    'columns' => ['customer_id', 'cust_name', 'email_address'],
+                    'score' => 70,
+                    'reasons' => ["Nama entitas cocok 100%", "Berada pada schema public", "Tidak berasal dari schema dw"],
+                    'type' => 'MASTER'
+                ];
+                $scoredSources[] = [
+                    'table' => 'public.payment',
+                    'connection' => 'PostgreSQL Public',
+                    'columns' => ['payment_id', 'customer_id', 'amount'],
+                    'score' => 20,
+                    'reasons' => ["Memiliki kolom relasi customer_id", "Tabel transaksi digunakan untuk dimensi (penalti -50 poin)"],
+                    'type' => 'TRANSACTION'
+                ];
+            } else {
+                $sourceTable = 'public.payment';
+                $sourceColumns = ['payment_id', 'customer_id', 'amount', 'payment_date'];
+                $scoredSources[] = [
+                    'table' => 'public.payment',
+                    'connection' => 'PostgreSQL Public',
+                    'columns' => $sourceColumns,
+                    'score' => 80,
+                    'reasons' => ["Nama entitas cocok", "Berada pada schema public"],
+                    'type' => 'TRANSACTION'
+                ];
+                $scoredSources[] = [
+                    'table' => 'staging.sales_log',
+                    'connection' => 'PostgreSQL Staging',
+                    'columns' => ['log_id', 'amount', 'created_at'],
+                    'score' => 50,
+                    'reasons' => ["Berada pada schema staging"],
+                    'type' => 'STAGING'
+                ];
+            }
+            $selectedSourceObj = $scoredSources[0];
+        }
 
-                // Check if target is a name column and source has first_name + last_name
-                $isNameColumn = $tcL === 'customer_name' || $tcL === 'full_name' || $tcL === 'name';
-                $srcColsLower = array_map('strtolower', $sourceColumns);
-                $hasFirstLast = in_array('first_name', $srcColsLower) && in_array('last_name', $srcColsLower);
-                if ($isNameColumn && $hasFirstLast) {
-                    $mapping[] = ['source' => '[Kalkulasi: first_name + \' \' + last_name]', 'target' => trim($tc)];
-                    continue;
-                }
+        // Build candidate sources in output format
+        $candidates = [];
+        foreach (array_slice($scoredSources, 0, 3) as $ss) {
+            $candidates[] = [
+                'table' => $ss['table'],
+                'score' => $ss['score'],
+                'reasons' => $ss['reasons'],
+                'type' => $ss['type'],
+                'connection' => $ss['connection']
+            ];
+        }
 
-                if ($tcL === 'beginning_balance') {
-                    $mapping[] = ['source' => '[Lookup: ending_balance (bulan sebelumnya)]', 'target' => trim($tc)];
-                    continue;
+        // ─── STEP 6: Generate ETL Pipeline (Transformations) ──────────────
+        $transformations = [];
+        $steps = [];
+        if ($targetType === 'DIMENSION') {
+            $transformations = ['Select Values', 'Formula', 'Unique Rows'];
+            $steps = ['Table Input', 'Select Values', 'Formula', 'Unique Rows', 'Table Output'];
+        } elseif ($targetType === 'FACT') {
+            $transformations = ['Lookup', 'Calculator', 'Group By'];
+            $steps = ['Table Input', 'Lookup', 'Calculator', 'Group By', 'Table Output'];
+        } else {
+            $transformations = ['Select Values', 'Calculator', 'Group By'];
+            $steps = ['Table Input', 'Select Values', 'Calculator', 'Group By', 'Table Output'];
+        }
+
+        // ─── Column Mapping & Formula Intelligence ──────────────────────────
+        $mapping = [];
+        $srcColsLower = array_map('strtolower', $sourceColumns);
+        $tgtColsLower = array_map('strtolower', $targetColumns);
+
+        // Check for concatenation mapping (first_name + last_name -> customer_name)
+        $hasFirstLast = in_array('first_name', $srcColsLower) && in_array('last_name', $srcColsLower);
+        
+        foreach ($targetColumns as $tc) {
+            $tcL = strtolower(trim($tc));
+            
+            // Concatenation logic
+            if (($tcL === 'customer_name' || $tcL === 'full_name' || $tcL === 'name') && $hasFirstLast) {
+                $mapping[] = ['source' => "[Kalkulasi: first_name + ' ' + last_name]", 'target' => trim($tc)];
+                continue;
+            }
+            
+            // Surrogate/Serial Key logic
+            $isSurrogateKey = str_ends_with($tcL, '_key') || str_ends_with($tcL, '_id') || $tcL === 'id';
+            $inSource = in_array($tcL, $srcColsLower);
+            if ($isSurrogateKey && !$inSource) {
+                $mapping[] = ['source' => '[Serial (Unique)]', 'target' => trim($tc)];
+                continue;
+            }
+
+            // Normal semantic match
+            $bestSrc = null;
+            foreach ($sourceColumns as $sc) {
+                if (strtolower(trim($sc)) === $tcL) {
+                    $bestSrc = $sc;
+                    break;
                 }
-                
-                $bestSrc = null;
-                // 1. Exact match
+            }
+            if (!$bestSrc) {
+                // partial match
                 foreach ($sourceColumns as $sc) {
-                    if (strtolower(trim($sc)) === $tcL) {
+                    $scL = strtolower(trim($sc));
+                    if (str_contains($tcL, $scL) || str_contains($scL, $tcL)) {
                         $bestSrc = $sc;
                         break;
                     }
                 }
-                
-                // 2. Target contains source or vice versa (e.g. payment_amount vs amount)
-                if (!$bestSrc) {
-                    foreach ($sourceColumns as $sc) {
-                        $scL = strtolower(trim($sc));
-                        if (str_contains($tcL, $scL) || str_contains($scL, $tcL)) {
-                            if ($tcL === 'payment_amount' && $scL === 'amount') {
-                                $bestSrc = $sc . ' (Summed)';
-                            } elseif ($tcL === 'period_month' && $scL === 'payment_date') {
-                                $bestSrc = $sc . ' (Month/Year)';
-                            } else {
-                                $bestSrc = $sc;
-                            }
-                            break;
-                        }
-                    }
-                }
-                
-                // 3. Time/Date semantic match (e.g. period_month vs payment_date)
-                if (!$bestSrc && ($tcL === 'period_month' || str_contains($tcL, 'month') || str_contains($tcL, 'period'))) {
-                    foreach ($sourceColumns as $sc) {
-                        $scL = strtolower(trim($sc));
-                        if (str_contains($scL, 'date') || str_contains($scL, 'time') || str_contains($scL, 'created') || str_contains($scL, 'month') || str_contains($scL, 'year')) {
-                            $bestSrc = $sc . ' (Month/Year)';
-                            break;
-                        }
-                    }
-                }
-                
-                $mapping[] = ['source' => $bestSrc ? trim($bestSrc) : '(pilih kolom sumber)', 'target' => trim($tc)];
             }
-
-            // ── Transformations ───────────────────────────────────────────────
-            $tgtColsL = array_map('strtolower', $targetColumns);
-            if (in_array('balance_id',$tgtColsL)||in_array('beginning_balance',$tgtColsL)||str_contains($lower,'balance')||str_contains($lower,'saldo')) {
-                $transformations = ['Select Values','Lookup','Join','Aggregation','Calculator','Data Validation'];
-            } elseif (str_contains($lower,'fact')||str_contains($lower,'sales')||str_contains($lower,'transaction')) {
-                $transformations = ['Select Values','Join','Aggregation','Filter Rows'];
-            } elseif (str_contains($lower,'dim')||str_contains($lower,'dimension')) {
-                $transformations = ['Select Values','Rename Fields','Remove Duplicates','Data Cleansing'];
-            } else {
-                $transformations = ['Select Values','Data Cleansing','Data Validation'];
-            }
-
-            $plan = "Pipeline mengekstrak data dari '{$sourceTable}' ({$sourceConn}), menerapkan transformasi, dan memuat ke '{$targetTable}' ({$targetConn}). Pastikan koneksi sudah dikonfigurasi di modul Connections.";
-
-            // ── Candidate Sources Discovery ───────────────────────────────────
-            $candidates = [];
-            $targetSchema = null;
-            if (str_contains($targetTable, '.')) {
-                $targetSchema = explode('.', $targetTable)[0];
-            }
-
-            foreach ($connections as $conn) {
-                foreach ($conn['tables'] ?? [] as $tbl) {
-                    if ($tbl['name'] === $targetTable) continue;
-
-                    // Skip tables belonging to target schema (e.g. 'dw')
-                    if ($targetSchema && str_starts_with(strtolower($tbl['name']), strtolower($targetSchema) . '.')) {
-                        continue;
-                    }
-                    
-                    $tblName = $tbl['name'];
-                    $bareName = strstr($tblName, '.') !== false ? substr(strstr($tblName, '.'), 1) : $tblName;
-                    
-                    $score = 10; // base score
-                    $reasons = [];
-                    
-                    $cols = !empty($tbl['columns']) ? array_map('trim', explode(',', $tbl['columns'])) : [];
-                    $exact = array_intersect(array_map('strtolower', $cols), array_map('strtolower', $targetColumns));
-                    if (count($exact) > 0) {
-                        $score += count($exact) * 15;
-                        $reasons[] = "Memiliki kolom relasi target: " . implode(', ', $exact);
-                    }
-                    
-                    if (in_array('amount', array_map('strtolower', $cols))) {
-                        $score += 20;
-                        $reasons[] = "Memiliki kolom transaksi 'amount'";
-                    }
-                    if (in_array('payment_date', array_map('strtolower', $cols))) {
-                        $score += 20;
-                        $reasons[] = "Memiliki kolom tanggal transaksi 'payment_date'";
-                    }
-                    if (in_array('customer_id', array_map('strtolower', $cols))) {
-                        $score += 15;
-                        $reasons[] = "Memiliki index relasi utama 'customer_id'";
-                    }
-                    
-                    if (str_contains($lower, strtolower($bareName))) {
-                        $score += 15;
-                        $reasons[] = "Nama tabel disebut dalam instruksi";
-                    }
-
-                    // Boost same connection and penalize other connections
-                    $isSameConn = ($conn['name'] === $targetConn);
-                    if ($isSameConn) {
-                        $score += 20;
-                    } else {
-                        $score -= 20;
-                        $reasons[] = "Koneksi berbeda dari target";
-                    }
-                    
-                    $score = max(min($score, 99), 10);
-                    if ($score < 30) {
-                        $reasons[] = "Tidak memiliki relasi kuat ke target";
-                    }
-                    
-                    $candidates[] = [
-                        'table' => $tblName,
-                        'score' => $score,
-                        'reasons' => $reasons
-                    ];
-                }
-            }
-            
-            usort($candidates, function($a, $b) {
-                return $b['score'] <=> $a['score'];
-            });
-            $candidates = array_slice($candidates, 0, 3);
-
-            // ── AI Analysis & Reasoning ───────────────────────────────────────
-            $analyses = [];
-            if ($sourceTable === 'public.payment') {
-                $analyses[] = "Tabel 'public.payment' digunakan karena memiliki data log transaksi pembayaran dengan kolom 'amount' dan 'payment_date'.";
-            }
-            if ($sourceTable === 'public.customer' || count(array_intersect(array_map('strtolower', $sourceColumns), ['first_name', 'last_name', 'email'])) > 0) {
-                $analyses[] = "Tabel master customer digunakan untuk memetakan informasi identitas pelanggan.";
-            } else {
-                $analyses[] = "Tabel 'public.customer' diabaikan karena tidak menyimpan log data nominal transaksi.";
-            }
-            
-            $hasLookup = false;
-            foreach ($mapping as $map) {
-                if (str_contains($map['source'], '[Lookup')) {
-                    $hasLookup = true;
-                    $analyses[] = "Kolom '{$map['target']}' tidak ditemukan di tabel sumber fisik. Diasumsikan berasal dari ending_balance periode sebelumnya melalui Database Lookup.";
-                }
-            }
-            if (!$hasLookup) {
-                $analyses[] = "Semua kolom target dapat dipetakan langsung dari kolom fisik atau kalkulasi statis.";
-            }
-            
-            $reasoning = [
-                'target' => $targetTable,
-                'target_columns' => $targetColumns,
-                'analyses' => $analyses
-            ];
-
-            // ── Confidence Score ─────────────────────────────────────────────
-            $mappedCount = 0;
-            $unmappedCount = 0;
-            $factors = [];
-            foreach ($mapping as $map) {
-                if (str_contains($map['source'], '(pilih kolom')) {
-                    $unmappedCount++;
-                } else {
-                    $mappedCount++;
-                }
-            }
-            
-            $confScore = 95;
-            if ($unmappedCount > 0) {
-                $confScore -= ($unmappedCount * 15);
-                $factors[] = "Terdapat kolom target yang tidak terpetakan";
-            } else {
-                $factors[] = "Kesesuaian nama kolom terpetakan penuh";
-            }
-            
-            if ($hasLookup) {
-                $confScore -= 10;
-                $factors[] = "Terdapat asumsi lookup saldo periode sebelumnya";
-            }
-            
-            $hasPk = false;
-            foreach ($targetColumns as $tc) {
-                if (str_contains(strtolower($tc), 'id') || str_contains(strtolower($tc), 'key')) {
-                    $hasPk = true;
-                }
-            }
-            if ($hasPk) {
-                $factors[] = "Ketersediaan Primary Key / Index Unik pada tabel target";
-            } else {
-                $confScore -= 10;
-                $factors[] = "Tabel target tidak memiliki primary key terdeteksi";
-            }
-            
-            $confScore = max(min($confScore, 99), 10);
-            $category = "High Confidence";
-            if ($confScore < 70) {
-                $category = "Low Confidence";
-            } elseif ($confScore < 90) {
-                $category = "Medium Confidence";
-            }
-            
-            $confidence = [
-                'score' => $confScore,
-                'category' => $category,
-                'warning' => $confScore < 70,
-                'factors' => $factors
-            ];
-
-            // ── SQL Preview ──────────────────────────────────────────────────
-            $sqlSourceTable = $sourceTable;
-            $sqlPreview = "SELECT\n";
-            $sqlMappingLines = [];
-            foreach ($mapping as $map) {
-                $src = $map['source'];
-                $tgt = $map['target'];
-                
-                if (str_contains($src, '[Kalkulasi')) {
-                    if ($tgt === 'ending_balance') {
-                        $sqlMappingLines[] = "    (prev.ending_balance + SUM(amount)) AS ending_balance";
-                    } else {
-                        $formula = $src;
-                        if (preg_match('/\[Kalkulasi:\s*(.*)\]/i', $src, $fm)) {
-                            $formula = $fm[1];
-                        }
-                        $sqlMappingLines[] = "    ({$formula}) AS {$tgt}";
-                    }
-                } elseif (str_contains($src, '[Sequence]') || str_contains($src, '[Serial')) {
-                    $sqlMappingLines[] = "    NEXTVAL('seq_{$tgt}') AS {$tgt}";
-                } elseif (str_contains($src, '[Konstanta')) {
-                    $sqlMappingLines[] = "    0.0 AS beginning_balance";
-                } elseif (str_contains($src, '[Lookup')) {
-                    $sqlMappingLines[] = "    COALESCE(prev.ending_balance, 0.0) AS beginning_balance";
-                } elseif (str_contains($src, '(Month/Year)')) {
-                    $bareCol = trim(str_replace(' (Month/Year)', '', $src));
-                    $sqlMappingLines[] = "    DATE_TRUNC('month', {$bareCol}) AS period_month";
-                } elseif (str_contains($src, '(Summed)')) {
-                    $bareCol = trim(str_replace(' (Summed)', '', $src));
-                    $sqlMappingLines[] = "    SUM({$bareCol}) AS payment_amount";
-                } else {
-                    $sqlMappingLines[] = "    {$src} AS {$tgt}";
-                }
-            }
-            $sqlPreview .= implode(",\n", $sqlMappingLines) . "\n";
-            $sqlPreview .= "FROM {$sqlSourceTable}\n";
-            
-            if ($targetTable === 'dw.fact_customer_balance') {
-                $sqlPreview .= "LEFT JOIN dw.fact_customer_balance prev ON prev.customer_id = {$sqlSourceTable}.customer_id\n";
-                $sqlPreview .= "    AND prev.period_month = DATE_TRUNC('month', {$sqlSourceTable}.payment_date) - INTERVAL '1 month'\n";
-                $sqlPreview .= "GROUP BY {$sqlSourceTable}.customer_id, DATE_TRUNC('month', {$sqlSourceTable}.payment_date)";
-            }
-
-            // ── ETL JSON Definition ──────────────────────────────────────────
-            $steps = [];
-            $steps[] = ['type' => 'table_input', 'table' => $sourceTable];
-            if (in_array('Lookup', $transformations)) {
-                $steps[] = ['type' => 'lookup', 'source' => $targetTable];
-            }
-            if (in_array('Join', $transformations)) {
-                $steps[] = ['type' => 'join', 'with' => 'public.customer'];
-            }
-            if (in_array('Aggregation', $transformations)) {
-                $fields = ['customer_id'];
-                if (in_array('period_month', $targetColumns)) {
-                    $fields[] = 'period_month';
-                }
-                $steps[] = ['type' => 'group_by', 'fields' => $fields];
-            }
-            if (in_array('Calculator', $transformations)) {
-                $steps[] = ['type' => 'calculator'];
-            }
-            $steps[] = ['type' => 'table_output', 'table' => $targetTable];
-            
-            $jsonDefinition = [
-                'pipeline_name' => $name,
-                'steps' => $steps
-            ];
-
-            // ── Pipeline Steps ────────────────────────────────────────────────
-            $pipelineSteps = [];
-            $pipelineSteps[] = [
-                'name' => "Table Input: " . $sourceTable,
-                'description' => "Membaca data dari tabel sumber database",
-                'inputs' => [],
-                'outputs' => $sourceColumns
-            ];
-            $pipelineSteps[] = [
-                'name' => "Select Values",
-                'description' => "Memetakan tipe data dan nama kolom target",
-                'inputs' => $sourceColumns,
-                'outputs' => array_column($mapping, 'target')
-            ];
-            foreach ($transformations as $t) {
-                if ($t === 'Select Values') continue;
-                
-                $inputs = [];
-                $outputs = [];
-                $desc = "";
-                
-                if ($t === 'Lookup') {
-                    $desc = "Melakukan pencarian saldo akhir dari periode sebelumnya";
-                    $inputs = ['customer_id', 'period_month'];
-                    $outputs = ['beginning_balance'];
-                } elseif ($t === 'Join') {
-                    $desc = "Menggabungkan data transaksi dan data master customer";
-                    $inputs = ['customer_id'];
-                    $outputs = ['customer_name', 'email'];
-                } elseif ($t === 'Aggregation') {
-                    $desc = "Melakukan agregasi (sum/count/avg) data kelompok";
-                    $inputs = ['customer_id', 'amount'];
-                    $outputs = ['customer_id', 'payment_amount'];
-                } elseif ($t === 'Calculator') {
-                    $desc = "Menghitung formula matematika kustom antar field";
-                    $inputs = ['beginning_balance', 'payment_amount'];
-                    $outputs = ['ending_balance'];
-                } elseif ($t === 'Data Validation') {
-                    $desc = "Memvalidasi kepatuhan tipe data dan isi field";
-                    $inputs = ['ending_balance'];
-                    $outputs = [];
-                }
-                
-                $pipelineSteps[] = [
-                    'name' => $t,
-                    'description' => $desc,
-                    'inputs' => $inputs,
-                    'outputs' => $outputs
-                ];
-            }
-            $pipelineSteps[] = [
-                'name' => "Table Output: " . $targetTable,
-                'description' => "Memuat hasil akhir data ke gudang data target",
-                'inputs' => array_column($mapping, 'target'),
-                'outputs' => []
-            ];
-
-            // ── Validation Result ────────────────────────────────────────────
-            $warnings = [];
-            if ($hasLookup) {
-                $warnings[] = "beginning_balance menggunakan asumsi Lookup dari saldo akhir periode sebelumnya";
-            }
-            if ($unmappedCount > 0) {
-                $warnings[] = "Terdapat {$unmappedCount} kolom target yang belum terpetakan ke kolom sumber";
-            }
-            
-            $validationResult = [
-                'source_table_exists' => true,
-                'target_table_exists' => true,
-                'column_mapping_valid' => $unmappedCount === 0,
-                'data_type_compatible' => true,
-                'lookup_relation_valid' => true,
-                'warnings' => $warnings
-            ];
-
-            return [
-                'pipeline_name'          => $name,
-                'source_connection_name' => $sourceConn,
-                'source_table'           => $sourceTable,
-                'target_connection_name' => $targetConn,
-                'target_table'           => $targetTable,
-                'transformations'        => $transformations,
-                'column_mapping'         => $mapping,
-                'execution_plan'         => $plan,
-                'candidate_sources'      => $candidates,
-                'reasoning'              => $reasoning,
-                'confidence'             => $confidence,
-                'sql_preview'            => $sqlPreview,
-                'json_definition'        => $jsonDefinition,
-                'pipeline_steps'         => $pipelineSteps,
-                'validation_result'      => $validationResult
-            ];
+            $mapping[] = ['source' => $bestSrc ? trim($bestSrc) : '(pilih kolom sumber)', 'target' => trim($tc)];
         }
 
-        // ─── Hardcoded demo fallback (no connections in context) ──────────────
-        $isSharePoint = str_contains($lower, 'sharepoint') || str_contains($lower, 'csv') || str_contains($lower, 'leads');
-        if ($isSharePoint) {
-            $sourceConn  = 'SharePoint Sales Repo';
-            $sourceTable = 'leads_export.csv';
-            $transformations = ['Select Values', 'Filter Rows', 'String Operations'];
-            $mapping = [
-                ['source' => 'lead_id',   'target' => 'customer_id'],
-                ['source' => 'full_name', 'target' => 'customer_name'],
-                ['source' => 'email',     'target' => 'email'],
-                ['source' => 'country',   'target' => 'country']
-            ];
-            $plan = "Mengunduh file laporan prospek dari repositori SharePoint, membersihkan nilai email yang kosong, dan menyimpannya ke tabel pelanggan DWH.";
-        } else {
-            $mapping = [
-                ['source' => 'customer_id',   'target' => 'customer_id'],
-                ['source' => 'cust_name',     'target' => 'customer_name'],
-                ['source' => 'email_address', 'target' => 'email']
-            ];
-            $plan = "Mengekstrak data dari sumber, melakukan pembersihan dan standarisasi, lalu memuatnya ke tabel target gudang data.";
-        }
+        // ─── Execution Plan ──────────────────────────────────────────────────
+        $pipelineName = 'load_' . preg_replace('/[^a-z0-9_]/', '_', strtolower(str_replace('.', '_', $targetTable)));
+        $plan = "Mengekstrak data dari '{$sourceTable}' ({$sourceConn}), melakukan mapping kolom, menerapkan transformasi Pentaho, dan memuatnya ke DWH target '{$targetTable}' ({$targetConn}).";
 
-        $candidates = [
-            ['table' => $sourceTable, 'score' => 95, 'reasons' => ["Memiliki kolom-kolom identitas customer"]],
-            ['table' => 'other_table_raw', 'score' => 40, 'reasons' => ["Kecocokan rendah"]]
-        ];
-
+        // ─── Reasoning ───────────────────────────────────────────────────────
         $reasoning = [
-            'target' => $targetTable,
-            'target_columns' => ['customer_id', 'customer_name', 'email'],
-            'analyses' => [
-                "Tabel '{$sourceTable}' terpilih sebagai sumber data utama.",
-                "Tidak ada kolom kalkulatif kompleks yang terdeteksi."
-            ]
+            "Target: " . $targetTable,
+            "Target Type: " . $targetType,
+            "Business Entity: " . ucfirst($entity),
+            "Selected Source: " . $sourceTable,
+            "Reason:"
         ];
-
-        $confidence = [
-            'score' => 90,
-            'category' => 'High Confidence',
-            'warning' => false,
-            'factors' => ["Kesesuaian kolom terpetakan penuh"]
-        ];
-
-        $sqlPreview = "SELECT\n" . implode(",\n", array_map(function($m) { return "    {$m['source']} AS {$m['target']}"; }, $mapping)) . "\nFROM {$sourceTable}";
-
-        $steps = [];
-        $steps[] = ['type' => 'table_input', 'table' => $sourceTable];
-        foreach ($transformations as $t) {
-            $steps[] = ['type' => strtolower(str_replace(' ', '_', $t))];
+        if ($selectedSourceObj) {
+            $idx = 1;
+            foreach ($selectedSourceObj['reasons'] as $r) {
+                $reasoning[] = "{$idx}. {$r}";
+                $idx++;
+            }
         }
-        $steps[] = ['type' => 'table_output', 'table' => $targetTable];
 
-        $jsonDefinition = [
-            'pipeline_name' => $name,
-            'steps' => $steps
-        ];
-
-        $pipelineSteps = [];
-        $pipelineSteps[] = ['name' => 'Table Input: ' . $sourceTable, 'description' => 'Membaca data', 'inputs' => [], 'outputs' => []];
-        $pipelineSteps[] = ['name' => 'Table Output: ' . $targetTable, 'description' => 'Menulis data', 'inputs' => [], 'outputs' => []];
-
+        // ─── Validation Result & Confidence ──────────────────────────────────
+        $warnings = [];
+        $unmappedCount = 0;
+        foreach ($mapping as $m) {
+            if (str_contains($m['source'], '(pilih kolom')) {
+                $unmappedCount++;
+            }
+        }
+        if ($unmappedCount > 0) {
+            $warnings[] = "Terdapat {$unmappedCount} kolom target yang belum terpetakan ke kolom sumber";
+        }
+        
         $validationResult = [
             'source_table_exists' => true,
             'target_table_exists' => true,
-            'column_mapping_valid' => true,
+            'column_mapping_valid' => $unmappedCount === 0,
             'data_type_compatible' => true,
             'lookup_relation_valid' => true,
-            'warnings' => []
+            'warnings' => $warnings
+        ];
+
+        $confScore = max(99 - ($unmappedCount * 15), 10);
+        $confidence = [
+            'score' => $confScore,
+            'category' => $confScore >= 90 ? 'High Confidence' : ($confScore >= 70 ? 'Medium Confidence' : 'Low Confidence'),
+            'warning' => $confScore < 70,
+            'factors' => ["Kesesuaian skema target & scoring DWH"]
+        ];
+
+        // ─── SQL Preview ──────────────────────────────────────────────────────
+        $sqlMappingLines = [];
+        foreach ($mapping as $map) {
+            $src = $map['source'];
+            $tgt = $map['target'];
+            if (str_contains($src, '[Kalkulasi')) {
+                $sqlMappingLines[] = "    (first_name || ' ' || last_name) AS {$tgt}";
+            } elseif (str_contains($src, '[Serial')) {
+                $sqlMappingLines[] = "    NEXTVAL('seq_{$tgt}') AS {$tgt}";
+            } else {
+                $sqlMappingLines[] = "    {$src} AS {$tgt}";
+            }
+        }
+        $sqlPreview = "SELECT\n" . implode(",\n", $sqlMappingLines) . "\nFROM {$sourceTable}";
+
+        // ─── JSON Definition ──────────────────────────────────────────────────
+        $defSteps = [];
+        $defSteps[] = ['type' => 'table_input', 'table' => $sourceTable];
+        foreach ($transformations as $t) {
+            $defSteps[] = ['type' => strtolower(str_replace(' ', '_', $t))];
+        }
+        $defSteps[] = ['type' => 'table_output', 'table' => $targetTable];
+        $jsonDefinition = [
+            'pipeline_name' => $pipelineName,
+            'steps' => $defSteps
+        ];
+
+        // ─── Pipeline Steps (UI detail) ──────────────────────────────────────
+        $pipelineSteps = [];
+        $pipelineSteps[] = [
+            'name' => "Table Input: " . $sourceTable,
+            'description' => "Membaca data dari tabel sumber database",
+            'inputs' => [],
+            'outputs' => $sourceColumns
+        ];
+        foreach ($transformations as $t) {
+            $pipelineSteps[] = [
+                'name' => $t,
+                'description' => "Step transformasi Pentaho: " . $t,
+                'inputs' => $sourceColumns,
+                'outputs' => array_column($mapping, 'target')
+            ];
+        }
+        $pipelineSteps[] = [
+            'name' => "Table Output: " . $targetTable,
+            'description' => "Memuat hasil akhir data ke gudang data target",
+            'inputs' => array_column($mapping, 'target'),
+            'outputs' => []
         ];
 
         return [
-            'pipeline_name'          => $name,
+            'pipeline_name' => $pipelineName,
+            'target_type' => $targetType,
+            'business_entity' => $entity,
+            'selected_sources' => [$sourceTable],
+            'candidate_sources' => $candidates,
+            'reasoning' => $reasoning,
+            'steps' => $steps,
+            'column_mapping' => $mapping,
+            'validation_result' => $validationResult,
             'source_connection_name' => $sourceConn,
-            'source_table'           => $sourceTable,
+            'source_table' => $sourceTable,
             'target_connection_name' => $targetConn,
             'target_table' => $targetTable,
             'transformations' => $transformations,
-            'column_mapping' => $mapping,
-            'execution_plan' => $plan
+            'execution_plan' => $plan,
+            'sql_preview' => $sqlPreview,
+            'json_definition' => $jsonDefinition,
+            'pipeline_steps' => $pipelineSteps,
+            'confidence' => $confidence
         ];
     }
 
@@ -1349,5 +1223,110 @@ ORDER BY s.amount DESC LIMIT 15";
             'recommendations' => $recommendations,
             'priority' => $priority
         ];
+    }
+
+    /**
+     * Deterministically resolve target table name from prompt context
+     */
+    protected function resolveTargetTable(string $promptText, array $connections = []): string
+    {
+        $lower = strtolower($promptText);
+        $targetTable = 'dim_customer'; // default
+
+        // Strategy 1: Extract explicit schema.table refs from prompt
+        preg_match_all('/\b([a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*)\b/i', $promptText, $schemaTableM);
+        $schemaTableRefs = array_unique(array_map('strtolower', $schemaTableM[0] ?? []));
+
+        if (!empty($connections)) {
+            foreach ($schemaTableRefs as $ref) {
+                foreach ($connections as $conn) {
+                    foreach ($conn['tables'] ?? [] as $tbl) {
+                        if (strtolower($tbl['name']) === $ref) {
+                            return $tbl['name'];
+                        }
+                    }
+                }
+            }
+
+            // Strategy 2/3: substring check with word boundary
+            foreach ($connections as $conn) {
+                foreach ($conn['tables'] ?? [] as $tbl) {
+                    $tblNameLower = strtolower($tbl['name']);
+                    $pattern = '/\b' . preg_quote($tblNameLower, '/') . '\b/';
+                    if (preg_match($pattern, $lower)) {
+                        return $tbl['name'];
+                    }
+                }
+            }
+
+            // Strategy 3b: bare table name with word boundary
+            foreach ($connections as $conn) {
+                foreach ($conn['tables'] ?? [] as $tbl) {
+                    $bare = strstr($tbl['name'], '.') !== false
+                        ? substr(strstr($tbl['name'], '.'), 1)
+                        : $tbl['name'];
+                    $bareLower = strtolower($bare);
+                    $pattern = '/\b' . preg_quote($bareLower, '/') . '\b/';
+                    if (preg_match($pattern, $lower)) {
+                        return $tbl['name'];
+                    }
+                }
+            }
+        }
+
+        // Guess from prompt directly
+        if (preg_match('/\b([a-z0-9_]+\.(?:dim_|fact_|bridge_|agg_|summary_|mart_)[a-z0-9_]+)\b/i', $promptText, $m)) {
+            return $m[1];
+        } elseif (preg_match('/\b((?:dim_|fact_|bridge_|agg_|summary_|mart_)[a-z0-9_]+)\b/i', $promptText, $m)) {
+            return $m[1];
+        }
+
+        return $targetTable;
+    }
+
+    /**
+     * Deterministically filter database schemas to exclude target table and invalid DWH source schemas (dw, warehouse, datamart)
+     */
+    protected function filterSourceConnections(array $connections, string $targetTable): array
+    {
+        $targetTableLower = strtolower($targetTable);
+        $filteredConnections = [];
+
+        foreach ($connections as $conn) {
+            $filteredTables = [];
+            if (!empty($conn['tables'])) {
+                foreach ($conn['tables'] as $tbl) {
+                    $tblNameLower = strtolower($tbl['name']);
+
+                    // 1. Exclude target table (matching full name or bare name)
+                    $tblBare = str_contains($tblNameLower, '.') ? explode('.', $tblNameLower)[1] : $tblNameLower;
+                    $targetBare = str_contains($targetTableLower, '.') ? explode('.', $targetTableLower)[1] : $targetTableLower;
+                    if ($tblNameLower === $targetTableLower || $tblBare === $targetBare) {
+                        continue;
+                    }
+
+                    // 2. Exclude invalid schemas: dw, warehouse, datamart
+                    $tblSchema = str_contains($tblNameLower, '.') ? explode('.', $tblNameLower)[0] : 'public';
+                    if (in_array($tblSchema, ['dw', 'warehouse', 'datamart'])) {
+                        continue;
+                    }
+
+                    // 3. Exclude invalid prefixes
+                    if (str_starts_with($tblNameLower, 'dw.') || 
+                        str_starts_with($tblNameLower, 'warehouse.') || 
+                        str_starts_with($tblNameLower, 'datamart.')) {
+                        continue;
+                    }
+
+                    $filteredTables[] = $tbl;
+                }
+            }
+
+            $connCopy = $conn;
+            $connCopy['tables'] = $filteredTables;
+            $filteredConnections[] = $connCopy;
+        }
+
+        return $filteredConnections;
     }
 }

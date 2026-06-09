@@ -522,16 +522,19 @@
                                 <button 
                                     type="button"
                                     wire:click="autoGenerateMapping"
-                                    class="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-500/20 rounded text-[10px] font-bold flex items-center gap-1 transition-colors"
+                                    wire:loading.attr="disabled"
+                                    wire:target="autoGenerateMapping"
+                                    class="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-500/20 rounded text-[10px] font-bold flex items-center gap-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                     {{ empty($sourceColumns) || empty($targetColumns) ? 'disabled' : '' }}
                                 >
-                                    @if($isMappingLoading)
-                                        <svg class="w-3.5 h-3.5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 7.89"></path></svg>
-                                        Memetakan...
-                                    @else
+                                    <span wire:loading.remove wire:target="autoGenerateMapping" class="flex items-center gap-1">
                                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path></svg>
                                         Gunakan AI Automap
-                                    @endif
+                                    </span>
+                                    <span wire:loading wire:target="autoGenerateMapping" class="flex items-center gap-1">
+                                        <svg class="w-3.5 h-3.5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 7.89"></path></svg>
+                                        Memetakan...
+                                    </span>
                                 </button>
                             </div>
 
@@ -592,9 +595,18 @@
                             </button>
                             <button 
                                 type="submit"
-                                class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold transition-colors"
+                                wire:loading.attr="disabled"
+                                wire:target="save"
+                                class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                                Simpan Pipeline
+                                <span wire:loading.remove wire:target="save">Simpan Pipeline</span>
+                                <span wire:loading wire:target="save" class="flex items-center gap-1.5">
+                                    <svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                    </svg>
+                                    Menyimpan...
+                                </span>
                             </button>
                         </div>
                     </form>
@@ -631,16 +643,58 @@
                     </button>
                     <button 
                         @click="$wire.save()"
-                        class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition-all shadow-sm"
+                        wire:loading.attr="disabled"
+                        wire:target="save"
+                        class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                        Simpan Pipeline
+                        <span wire:loading.remove wire:target="save">Simpan Pipeline</span>
+                        <span wire:loading wire:target="save" class="flex items-center gap-1.5">
+                            <svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Menyimpan...
+                        </span>
                     </button>
                 </div>
             </div>
 
+            <!-- Workspace Tabs -->
+            <div class="flex border-b border-slate-200 dark:border-[#222735] bg-slate-50/50 dark:bg-[#161A25]/50 px-6 text-[10px] font-bold shrink-0">
+                <button 
+                    type="button"
+                    wire:click="$set('workspaceTab', 'canvas')"
+                    class="px-4 py-3 border-b-2 transition-all uppercase tracking-wider {{ $workspaceTab === 'canvas' ? 'border-indigo-500 text-indigo-650 dark:text-indigo-400' : 'border-transparent text-slate-500 hover:text-slate-750' }}"
+                >
+                    🔗 Visual Flow
+                </button>
+                <button 
+                    type="button"
+                    wire:click="$set('workspaceTab', 'sql')"
+                    class="px-4 py-3 border-b-2 transition-all uppercase tracking-wider {{ $workspaceTab === 'sql' ? 'border-indigo-500 text-indigo-650 dark:text-indigo-400' : 'border-transparent text-slate-500 hover:text-slate-750' }}"
+                >
+                    💻 SQL Preview
+                </button>
+                <button 
+                    type="button"
+                    wire:click="$set('workspaceTab', 'json')"
+                    class="px-4 py-3 border-b-2 transition-all uppercase tracking-wider {{ $workspaceTab === 'json' ? 'border-indigo-500 text-indigo-650 dark:text-indigo-400' : 'border-transparent text-slate-500 hover:text-slate-750' }}"
+                >
+                    📂 JSON Definition
+                </button>
+                <button 
+                    type="button"
+                    wire:click="$set('workspaceTab', 'airflow')"
+                    class="px-4 py-3 border-b-2 transition-all uppercase tracking-wider {{ $workspaceTab === 'airflow' ? 'border-indigo-500 text-indigo-650 dark:text-indigo-400' : 'border-transparent text-slate-500 hover:text-slate-750' }}"
+                >
+                    💨 Airflow DAG
+                </button>
+            </div>
+
             <!-- Workspace Body -->
             <div class="flex-1 flex overflow-hidden relative">
-                <!-- 1. LEFT PALETTE (Steps List) -->
+                @if($workspaceTab === 'canvas')
+                    <!-- 1. LEFT PALETTE (Steps List) -->
                 <div class="w-64 border-r border-slate-200 dark:border-[#222735] bg-slate-50/30 dark:bg-[#12151E]/30 p-4 space-y-4 overflow-y-auto shrink-0">
                     <h3 class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Palette Komponen</h3>
                     
@@ -1175,6 +1229,125 @@
                         </div>
                     </template>
                 </div>
+                @endif
+
+                @if($workspaceTab === 'sql')
+                    <div class="flex-1 p-6 bg-slate-50 dark:bg-[#161A25]/30 overflow-y-auto space-y-4 relative">
+                        <!-- Tab Loading Overlay -->
+                        <div wire:loading wire:target="$set('workspaceTab', 'sql')" class="absolute inset-0 bg-white/70 dark:bg-[#12151E]/70 backdrop-blur-sm z-20 flex flex-col items-center justify-center space-y-3">
+                            <svg class="w-8 h-8 text-indigo-500 animate-spin" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            <span class="text-xs font-bold text-slate-700 dark:text-slate-350">Memuat SQL Preview...</span>
+                        </div>
+                        <div class="max-w-4xl mx-auto bg-white dark:bg-[#12151E] p-6 rounded-xl border border-slate-200 dark:border-[#222735] shadow-sm space-y-3">
+                            <div class="flex justify-between items-center text-[10px] text-slate-450 font-bold uppercase tracking-wider">
+                                <span>SQL Extraction Query (dialek database)</span>
+                                <span class="text-indigo-500 font-mono">PostgreSQL Preview</span>
+                            </div>
+                            <pre class="bg-black p-4 rounded-lg font-mono text-xs text-indigo-300 overflow-x-auto leading-relaxed select-all">{{ $this->getSqlQueryPreview() }}</pre>
+                        </div>
+                    </div>
+                @endif
+
+                @if($workspaceTab === 'json')
+                    <div class="flex-1 p-6 bg-slate-50 dark:bg-[#161A25]/30 overflow-y-auto space-y-4 relative">
+                        <!-- Tab Loading Overlay -->
+                        <div wire:loading wire:target="$set('workspaceTab', 'json')" class="absolute inset-0 bg-white/70 dark:bg-[#12151E]/70 backdrop-blur-sm z-20 flex flex-col items-center justify-center space-y-3">
+                            <svg class="w-8 h-8 text-indigo-500 animate-spin" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            <span class="text-xs font-bold text-slate-700 dark:text-slate-350">Memuat JSON Definition...</span>
+                        </div>
+                        <div class="max-w-4xl mx-auto bg-white dark:bg-[#12151E] p-6 rounded-xl border border-slate-200 dark:border-[#222735] shadow-sm space-y-3">
+                            <span class="text-[10px] text-slate-450 font-bold uppercase tracking-wider block font-mono">Struktur Data Internal JSON (PDI Engine Blueprint)</span>
+                            <pre class="bg-black p-4 rounded-lg font-mono text-xs text-indigo-300 overflow-x-auto leading-normal select-all">{{ json_encode($this->getJsonDefinition(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) }}</pre>
+                        </div>
+                    </div>
+                @endif
+
+                @if($workspaceTab === 'airflow')
+                    <div class="flex-1 p-6 bg-slate-50 dark:bg-[#161A25]/30 overflow-y-auto space-y-4 relative" x-data="{ 
+                        <!-- Tab Loading Overlay -->
+                        <div wire:loading wire:target="$set('workspaceTab', 'airflow')" class="absolute inset-0 bg-white/70 dark:bg-[#12151E]/70 backdrop-blur-sm z-20 flex flex-col items-center justify-center space-y-3">
+                            <svg class="w-8 h-8 text-indigo-500 animate-spin" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            <span class="text-xs font-bold text-slate-700 dark:text-slate-350">Menghasilkan Airflow DAG...</span>
+                        </div>
+                        code: `{{ $this->getAirflowDagCode() }}`,
+                        copied: false,
+                        copyCode() {
+                            navigator.clipboard.writeText(this.code);
+                            this.copied = true;
+                            setTimeout(() => this.copied = false, 2000);
+                        }
+                    }">
+                        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+                        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+                        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
+
+                        <div class="max-w-4xl mx-auto bg-white dark:bg-[#12151E] p-6 rounded-xl border border-slate-200 dark:border-[#222735] shadow-sm space-y-4">
+                            <div class="flex justify-between items-center text-[10px] text-slate-450 font-bold uppercase tracking-wider">
+                                <span>Apache Airflow Python DAG Code</span>
+                                <div class="flex gap-2.5">
+                                    <!-- Copy Code Button -->
+                                    <button 
+                                        type="button"
+                                        @click="copyCode()"
+                                        class="px-3.5 py-1.5 bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer"
+                                    >
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"></path></svg>
+                                        <span x-text="copied ? 'Disalin!' : 'Copy Code'"></span>
+                                    </button>
+                                    
+                                    <!-- Download .py Button -->
+                                    @if($isEditing && $selectedPipelineId)
+                                        <a 
+                                            href="{{ route('studio.pipelines.download-dag', $selectedPipelineId) }}"
+                                            class="px-3.5 py-1.5 bg-indigo-650 text-white hover:bg-indigo-700 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer"
+                                        >
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                                            Download .py
+                                        </a>
+                                    @else
+                                        @php
+                                            $pipelineData = $this->getPipelineDataFromCanvas();
+                                        @endphp
+                                        <form method="POST" action="{{ route('studio.pipelines.download-dag-draft') }}" class="inline">
+                                            @csrf
+                                            <input type="hidden" name="pipeline_name" value="{{ $pipelineData['name'] }}">
+                                            <input type="hidden" name="source_table" value="{{ $pipelineData['source_table'] }}">
+                                            <input type="hidden" name="target_table" value="{{ $pipelineData['target_table'] }}">
+                                            @foreach($pipelineData['transformations'] as $t)
+                                                <input type="hidden" name="transformations[]" value="{{ $t }}">
+                                            @endforeach
+                                            @foreach($pipelineData['column_mapping'] as $index => $map)
+                                                <input type="hidden" name="column_mapping[{{ $index }}][source]" value="{{ $map['source'] }}">
+                                                <input type="hidden" name="column_mapping[{{ $index }}][target]" value="{{ $map['target'] }}">
+                                            @endforeach
+                                            <input type="hidden" name="schedule_interval" value="{{ $pipelineData['schedule_interval'] }}">
+                                            
+                                            <button 
+                                                type="submit"
+                                                class="px-3.5 py-1.5 bg-indigo-600 text-white hover:bg-indigo-700 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer"
+                                            >
+                                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                                                Download .py
+                                            </button>
+                                        </form>
+                                    @endif
+                                </div>
+                            </div>
+                            <div class="relative rounded-lg overflow-hidden border border-slate-200 dark:border-slate-800 bg-[#0d1117]">
+                                <pre class="p-5 font-mono text-[11px] overflow-x-auto leading-relaxed text-slate-355"><code class="language-python" x-init="$nextTick(() => { if (typeof hljs !== 'undefined') { hljs.highlightElement($el); } })">{{ $this->getAirflowDagCode() }}</code></pre>
+                            </div>
+                        </div>
+                    </div>
+                @endif
             </div>
         </div>
 

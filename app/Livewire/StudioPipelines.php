@@ -1668,6 +1668,142 @@ class StudioPipelines extends Component
         ];
     }
 
+    public function getPipelineDataFromCanvas(): array
+    {
+        $canvas = !empty($this->canvasDataJson) ? json_decode($this->canvasDataJson, true) : null;
+        $transformations = [];
+        $sourceTable = $this->sourceTable ?: 'source_table';
+        $targetTable = $this->targetTable ?: 'target_table';
+        $columnMapping = $this->columnMappings;
+
+        if ($canvas && isset($canvas['nodes'])) {
+            $nodes = $canvas['nodes'];
+            $connections = [];
+            if (isset($canvas['connections']) && is_array($canvas['connections'])) {
+                foreach ($canvas['connections'] as $connItem) {
+                    if (is_array($connItem)) {
+                        if (array_key_exists('from', $connItem) || array_key_exists('fromNodeId', $connItem)) {
+                            $connections[] = $connItem;
+                        } else {
+                            foreach ($connItem as $subItem) {
+                                if (is_array($subItem)) {
+                                    $connections[] = $subItem;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Map nodes by ID
+            $nodeMap = [];
+            foreach ($nodes as $n) {
+                $nodeMap[$n['id']] = $n;
+            }
+
+            // Extract source/target from settings if configured
+            foreach ($nodes as $n) {
+                if (($n['type'] === 'input' || $n['name'] === 'Table Input' || $n['name'] === 'Database Input') && !empty($n['settings']['table'])) {
+                    $sourceTable = $n['settings']['table'];
+                }
+                if (($n['type'] === 'output' || $n['name'] === 'Table Output') && !empty($n['settings']['target_table'])) {
+                    $targetTable = $n['settings']['target_table'];
+                }
+            }
+
+            // Build adjacency list
+            $adj = [];
+            foreach ($connections as $c) {
+                $from = $c['from'] ?? $c['fromNodeId'] ?? null;
+                $to = $c['to'] ?? $c['toNodeId'] ?? null;
+                if ($from && $to) {
+                    $adj[$from][] = $to;
+                }
+            }
+
+            // Traverse from source
+            $visited = [];
+            $orderedTransforms = [];
+            $queue = ['source'];
+
+            while (!empty($queue)) {
+                $currId = array_shift($queue);
+                if (in_array($currId, $visited)) continue;
+                $visited[] = $currId;
+
+                if (isset($nodeMap[$currId])) {
+                    $node = $nodeMap[$currId];
+                    if ($node['type'] === 'transform') {
+                        $orderedTransforms[] = $node['label'] ?? $node['name'];
+                    }
+                }
+
+                if (isset($adj[$currId])) {
+                    foreach ($adj[$currId] as $nextId) {
+                        $queue[] = $nextId;
+                    }
+                }
+            }
+
+            if (!empty($orderedTransforms)) {
+                $transformations = $orderedTransforms;
+            } else {
+                $transformations = $this->selectedTransformations;
+            }
+        } else {
+            $transformations = $this->selectedTransformations;
+        }
+
+        return [
+            'name' => $this->name ?: 'etl_studio_pipeline',
+            'source_table' => $sourceTable,
+            'target_table' => $targetTable,
+            'transformations' => $transformations,
+            'column_mapping' => $columnMapping,
+            'schedule_interval' => $this->scheduleInterval
+        ];
+    }
+
+    public function getSqlQueryPreview(): string
+    {
+        $pipeline = $this->getPipelineDataFromCanvas();
+        $sqlMappingLines = [];
+        foreach ($pipeline['column_mapping'] as $map) {
+            $src = $map['source'] ?? '';
+            $tgt = $map['target'] ?? '';
+            if (str_contains($src, '[Kalkulasi')) {
+                $sqlMappingLines[] = "    (first_name || ' ' || last_name) AS {$tgt}";
+            } elseif (str_contains($src, '[Serial')) {
+                $sqlMappingLines[] = "    NEXTVAL('seq_{$tgt}') AS {$tgt}";
+            } else {
+                $sqlMappingLines[] = "    {$src} AS {$tgt}";
+            }
+        }
+        return "SELECT\n" . (empty($sqlMappingLines) ? "    *" : implode(",\n", $sqlMappingLines)) . "\nFROM " . $pipeline['source_table'];
+    }
+
+    public function getJsonDefinition(): array
+    {
+        $pipeline = $this->getPipelineDataFromCanvas();
+        $defSteps = [];
+        $defSteps[] = ['type' => 'table_input', 'table' => $pipeline['source_table']];
+        foreach ($pipeline['transformations'] as $t) {
+            $defSteps[] = ['type' => strtolower(str_replace(' ', '_', $t))];
+        }
+        $defSteps[] = ['type' => 'table_output', 'table' => $pipeline['target_table']];
+        
+        return [
+            'pipeline_name' => $pipeline['name'],
+            'steps' => $defSteps
+        ];
+    }
+
+    public function getAirflowDagCode(): string
+    {
+        $pipeline = $this->getPipelineDataFromCanvas();
+        return app(\App\Services\AirflowDagGeneratorService::class)->generate($pipeline);
+    }
+
     public function render()
     {
         $this->loadPipelines();

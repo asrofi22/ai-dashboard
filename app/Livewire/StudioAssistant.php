@@ -136,6 +136,84 @@ class StudioAssistant extends Component
         $this->isGenerating = false;
     }
 
+    public function selectCandidateSource(string $tableName): void
+    {
+        if (!$this->generatedPlan) return;
+
+        // Find the candidate source in the generated plan
+        $candidate = null;
+        foreach ($this->generatedPlan['candidate_sources'] ?? [] as $cand) {
+            if ($cand['table'] === $tableName) {
+                $candidate = $cand;
+                break;
+            }
+        }
+
+        if (!$candidate) return;
+
+        // Clear any previous status messages
+        $this->errorMessage = '';
+        $this->successMessage = '';
+
+        // Update selected source table
+        $this->generatedPlan['source_table'] = $tableName;
+        
+        // Find source columns from metadata
+        $sourceColumns = [];
+        $sourceConnName = $candidate['connection'] ?? ($this->generatedPlan['source_connection_name'] ?? '');
+        $conn = EtlConnection::where('name', $sourceConnName)->first() 
+            ?? EtlConnection::find($this->sourceConnectionId)
+            ?? EtlConnection::first();
+        
+        if ($conn) {
+            $this->generatedPlan['source_connection_name'] = $conn->name;
+            $meta = $conn->metadata ?? [];
+            foreach (array_merge($meta['tables'] ?? [], $meta['views'] ?? []) as $t) {
+                if ($t['name'] === $tableName) {
+                    $sourceColumns = is_array($t['columns']) ? $t['columns'] : array_map('trim', explode(',', $t['columns']));
+                    break;
+                }
+            }
+        }
+
+        // Target columns from existing plan
+        $targetColumns = $this->generatedPlan['reasoning']['target_columns'] ?? [];
+
+        // Generate new column mapping using local/AI service
+        $gemini = app(GeminiService::class);
+        $newMapping = $gemini->generateStudioColumnMapping($sourceColumns, $targetColumns);
+
+        if ($newMapping) {
+            $this->generatedPlan['column_mapping'] = $newMapping;
+        }
+
+        // Regenerate SQL Preview & Pipeline Steps description
+        $sqlMappingLines = [];
+        foreach ($this->generatedPlan['column_mapping'] ?? [] as $map) {
+            $src = $map['source'];
+            $tgt = $map['target'];
+            if (str_contains($src, '[Kalkulasi')) {
+                $sqlMappingLines[] = "    (first_name || ' ' || last_name) AS {$tgt}";
+            } elseif (str_contains($src, '[Serial')) {
+                $sqlMappingLines[] = "    NEXTVAL('seq_{$tgt}') AS {$tgt}";
+            } else {
+                $sqlMappingLines[] = "    {$src} AS {$tgt}";
+            }
+        }
+        $this->generatedPlan['sql_preview'] = "SELECT\n" . implode(",\n", $sqlMappingLines) . "\nFROM {$tableName}";
+
+        // Update PDI Blueprint steps
+        if (!empty($this->generatedPlan['json_definition'])) {
+            $this->generatedPlan['json_definition']['steps'][0]['table'] = $tableName;
+        }
+        if (!empty($this->generatedPlan['pipeline_steps'])) {
+            $this->generatedPlan['pipeline_steps'][0]['name'] = "Table Input: " . $tableName;
+            $this->generatedPlan['pipeline_steps'][0]['outputs'] = $sourceColumns;
+        }
+        
+        $this->successMessage = "Tabel sumber berhasil diubah ke '{$tableName}'! Pemetaan kolom dan SQL preview telah diperbarui otomatis.";
+    }
+
     public function savePipeline(): void
     {
         if (!$this->generatedPlan) return;
@@ -286,6 +364,14 @@ class StudioAssistant extends Component
             Log::error("StudioAssistant::savePipeline error: " . $e->getMessage());
             $this->errorMessage = 'Gagal menyimpan pipeline ke database: ' . $e->getMessage();
         }
+    }
+
+    public function getAirflowDagCode(): string
+    {
+        if (!$this->generatedPlan) {
+            return '';
+        }
+        return app(\App\Services\AirflowDagGeneratorService::class)->generate($this->generatedPlan);
     }
 
     public function render()
