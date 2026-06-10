@@ -8,12 +8,12 @@ use Exception;
 
 class GeminiService
 {
-    protected string $apiKey;
-    protected string $baseUrl;
+    protected string $apiKey = '';
+    protected string $baseUrl = '';
 
     public function __construct()
     {
-        $this->apiKey = config('services.gemini.key', env('GEMINI_API_KEY'));
+        $this->apiKey = config('services.gemini.key') ?? env('GEMINI_API_KEY') ?? '';
         $this->baseUrl = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
     }
 

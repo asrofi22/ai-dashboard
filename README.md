@@ -9,8 +9,6 @@
 [![PHP](https://img.shields.io/badge/PHP-8.3+-777BB4?style=for-the-badge&logo=php&logoColor=white)](https://php.net)
 [![Tailwind CSS](https://img.shields.io/badge/TailwindCSS-4.x-38B2AC?style=for-the-badge&logo=tailwind-css&logoColor=white)](https://tailwindcss.com)
 [![Gemini AI](https://img.shields.io/badge/Gemini_AI-2.5_Flash-4285F4?style=for-the-badge&logo=google&logoColor=white)](https://deepmind.google/technologies/gemini/)
-[![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
-
 </div>
 
 ---
@@ -351,14 +349,12 @@ php artisan migrate
 
 ---
 
-## 📄 Lisensi
-
-Proyek ini dilisensikan di bawah [MIT License](LICENSE).
-
 ---
 
 <div align="center">
 
-**Dibuat dengan ❤️ menggunakan Laravel + Livewire + Google Gemini AI**
+**Dibuat dengan ❤️ oleh [Asrofi](https://github.com/asrofi22) · Laravel + Livewire + Google Gemini AI**
+
+© 2026 Asrofi. All rights reserved.
 
 </div>
