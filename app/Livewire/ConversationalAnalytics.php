@@ -76,7 +76,7 @@ class ConversationalAnalytics extends Component
     // ─────────────────────────────────────────────────────────────
     private function callGeminiOnce(string $userQuestion): array
     {
-        $apiKey = config('services.gemini.key', env('GEMINI_API_KEY'));
+        $apiKey = config('services.gemini.key') ?? env('GEMINI_API_KEY') ?? '';
         if (empty($apiKey)) {
             return ['answer' => '❌ GEMINI_API_KEY belum dikonfigurasi di .env.', 'sql' => null];
         }
@@ -132,7 +132,7 @@ PROMPT;
             $response = Http::timeout(25)
                 ->withHeaders(['Content-Type' => 'application/json'])
                 ->post(
-                    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' . $apiKey,
+                    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' . $apiKey,
                     [
                         'system_instruction' => ['parts' => [['text' => $systemPrompt]]],
                         'contents' => [['role' => 'user', 'parts' => [['text' => $userQuestion]]]],
