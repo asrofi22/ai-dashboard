@@ -45,6 +45,7 @@ class ConversationalAnalytics extends Component
 
         $msgIdx    = count($this->messages);
         $answerText = $decision['answer'] ?? 'Maaf, tidak ada respons.';
+        $answerText = $this->sanitizeUtf8($answerText);
 
         if (!empty($decision['sql'])) {
             // Execute the SQL
@@ -251,6 +252,18 @@ PROMPT;
 {$recentRuns}
 [DUPLIKASI]: {$totalCandidates} kandidat, {$highRisk} risiko tinggi, {$confirmed} dikonfirmasi
 CTX;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Strip non-UTF-8 characters that crash CommonMark / Str::markdown()
+    // ─────────────────────────────────────────────────────────────
+    private function sanitizeUtf8(string $text): string
+    {
+        // Convert to UTF-8, replacing invalid sequences with ''
+        $clean = mb_convert_encoding($text, 'UTF-8', 'UTF-8');
+        // Remove any remaining non-printable / invalid bytes
+        $clean = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $clean ?? $text);
+        return $clean ?? $text;
     }
 
     private function buildHistoryText(): string

@@ -37,7 +37,14 @@
                         <div class="space-y-2 flex-1">
                             <!-- AI Message Bubble -->
                             <div class="bg-white dark:bg-[#1C212E] p-4 rounded-2xl rounded-tl-sm border border-slate-200 dark:border-[#2A303F] shadow-sm text-sm text-slate-700 dark:text-slate-300 leading-relaxed">
-                                {!! Str::markdown($msg['content']) !!}
+                                @php
+                                    try {
+                                        $renderedHtml = Str::markdown($msg['content']);
+                                    } catch (\Throwable $e) {
+                                        $renderedHtml = e($msg['content']);
+                                    }
+                                @endphp
+                                {!! $renderedHtml !!}
                             </div>
 
                             {{-- SQL Result Table (if this message has a query result) --}}
