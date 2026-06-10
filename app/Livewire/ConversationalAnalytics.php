@@ -129,47 +129,77 @@ ATURAN JAWABAN:
 - Jangan mengarang data yang tidak ada di metadata atau hasil query.
 PROMPT;
 
-        try {
-            $response = Http::timeout(25)
-                ->withHeaders(['Content-Type' => 'application/json'])
-                ->post(
-                    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' . $apiKey,
-                    [
-                        'system_instruction' => ['parts' => [['text' => $systemPrompt]]],
-                        'contents' => [['role' => 'user', 'parts' => [['text' => $userQuestion]]]],
-                        'generationConfig' => [
-                            'temperature'     => 0.2,
-                            'maxOutputTokens' => 1024,
-                        ],
-                    ]
-                );
+        // Model fallback chain: try from best to most available
+        $modelChain = [
+            'gemini-2.5-flash',
+            'gemini-2.0-flash-lite',
+            'gemini-2.0-flash',
+        ];
 
-            if ($response->successful()) {
-                $raw = $response->json('candidates.0.content.parts.0.text', '{}');
-                // Strip possible markdown code fences
-                $raw = trim(preg_replace('/^```(?:json)?\s*/i', '', $raw));
-                $raw = preg_replace('/\s*```\s*$/i', '', $raw);
+        $lastError = null;
 
-                $decoded = json_decode($raw, true);
-                if (is_array($decoded) && isset($decoded['answer'])) {
-                    return $decoded;
+        foreach ($modelChain as $model) {
+            try {
+                $response = Http::timeout(30)
+                    ->withHeaders(['Content-Type' => 'application/json'])
+                    ->post(
+                        "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key={$apiKey}",
+                        [
+                            'system_instruction' => ['parts' => [['text' => $systemPrompt]]],
+                            'contents'           => [['role' => 'user', 'parts' => [['text' => $userQuestion]]]],
+                            'generationConfig'   => [
+                                'temperature'     => 0.2,
+                                'maxOutputTokens' => 1024,
+                            ],
+                        ]
+                    );
+
+                if ($response->successful()) {
+                    $raw = $response->json('candidates.0.content.parts.0.text', '{}');
+                    $raw = trim(preg_replace('/^```(?:json)?\s*/i', '', $raw));
+                    $raw = preg_replace('/\s*```\s*$/i', '', $raw);
+
+                    $decoded = json_decode($raw, true);
+                    if (is_array($decoded) && isset($decoded['answer'])) {
+                        return $decoded;
+                    }
+                    return ['answer' => $raw ?: 'Maaf, tidak ada respons.', 'sql' => null];
                 }
-                // If JSON parsing failed, return raw text as answer
-                return ['answer' => $raw ?: 'Maaf, tidak ada respons.', 'sql' => null];
+
+                // 429 = rate limit → try next model in chain
+                if ($response->status() === 429) {
+                    Log::warning("Gemini [{$model}] rate limited (429), trying next model...");
+                    $lastError = 429;
+                    continue;
+                }
+
+                // Other errors: log and bail out
+                Log::error("Gemini [{$model}] error", [
+                    'status' => $response->status(),
+                    'body'   => $response->body(),
+                ]);
+                $lastError = $response->status();
+                break;
+
+            } catch (\Exception $e) {
+                Log::error("Gemini [{$model}] exception: " . $e->getMessage());
+                $lastError = $e->getMessage();
+                break;
             }
-
-            Log::error('Gemini chat error', ['status' => $response->status(), 'body' => $response->body()]);
-
-            if ($response->status() === 429) {
-                return ['answer' => '⚠️ Layanan AI sedang sibuk (batas permintaan tercapai). Harap tunggu **30 detik** lalu coba lagi.', 'sql' => null];
-            }
-
-            return ['answer' => 'Terjadi kesalahan API (kode: ' . $response->status() . '). Silakan coba lagi.', 'sql' => null];
-
-        } catch (\Exception $e) {
-            Log::error('Gemini exception: ' . $e->getMessage());
-            return ['answer' => 'Koneksi ke layanan AI gagal: ' . $e->getMessage(), 'sql' => null];
         }
+
+        // All models exhausted or failed
+        if ($lastError === 429) {
+            return [
+                'answer' => '⚠️ Semua model AI sedang mencapai batas quota harian (free tier). Coba lagi besok atau upgrade ke Gemini API berbayar.',
+                'sql'    => null,
+            ];
+        }
+
+        return [
+            'answer' => '⚠️ Layanan AI tidak tersedia saat ini (kode: ' . $lastError . '). Silakan coba lagi.',
+            'sql'    => null,
+        ];
     }
 
     // ─────────────────────────────────────────────────────────────
