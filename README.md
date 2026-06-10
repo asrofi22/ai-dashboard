@@ -61,7 +61,7 @@ Dibangun dengan **Laravel 13 + Livewire 4** untuk pengalaman reaktif tanpa perlu
 | **CSS Framework** | Tailwind CSS 4.x |
 | **Build Tool** | Vite 8.x |
 | **AI Engine** | Google Gemini 2.5 Flash API |
-| **Database Default** | SQLite (konfigurasi MySQL/PostgreSQL tersedia) |
+| **Database Default** | PostgreSQL |
 | **Job Queue** | Laravel Queue (database driver) |
 | **Export** | Maatwebsite/Laravel Excel |
 | **Charts** | Chart.js 4.x |
@@ -74,7 +74,7 @@ Dibangun dengan **Laravel 13 + Livewire 4** untuk pengalaman reaktif tanpa perlu
 - **PHP** >= 8.3
 - **Composer** >= 2.x
 - **Node.js** >= 18.x & **npm** >= 9.x
-- **SQLite** (default) atau **PostgreSQL** / **MySQL**
+- **PostgreSQL** >= 12
 - **Google Gemini API Key** (untuk fitur AI)
 
 ---
@@ -109,13 +109,13 @@ Buka file `.env` dan sesuaikan konfigurasi berikut:
 APP_NAME="AI Dashboard"
 APP_URL=http://localhost:8000
 
-# Database (SQLite default, atau ganti ke PostgreSQL/MySQL)
-DB_CONNECTION=sqlite
-# DB_HOST=127.0.0.1
-# DB_PORT=5432
-# DB_DATABASE=ai_dashboard
-# DB_USERNAME=your_username
-# DB_PASSWORD=your_password
+# Database PostgreSQL
+DB_CONNECTION=pgsql
+DB_HOST=127.0.0.1
+DB_PORT=5432
+DB_DATABASE=ai_dashboard
+DB_USERNAME=your_username
+DB_PASSWORD=your_password
 
 # Google Gemini AI API Key (WAJIB untuk fitur AI)
 GEMINI_API_KEY=your_gemini_api_key_here
@@ -325,20 +325,15 @@ Tambahkan konfigurasi di `config/services.php`:
 ],
 ```
 
-### Menggunakan PostgreSQL / MySQL
+### Catatan PostgreSQL
 
-Update `.env`:
+Proyek ini menggunakan **PostgreSQL** sebagai database utama. Pastikan extension `pg_trgm` sudah aktif (digunakan untuk fuzzy matching):
 
-```env
-DB_CONNECTION=pgsql
-DB_HOST=127.0.0.1
-DB_PORT=5432
-DB_DATABASE=ai_dashboard
-DB_USERNAME=postgres
-DB_PASSWORD=secret
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 ```
 
-Kemudian jalankan:
+Migrasi pertama (`enable_pg_trgm_extension`) akan menjalankan ini secara otomatis saat:
 
 ```bash
 php artisan migrate
